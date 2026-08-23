@@ -1,0 +1,10 @@
+#ifdef APSTUDIO_INVOKED
+#error this file is not editable by Microsoft Visual C++
+#endif
+
+#include "versinfo.rh2"
+#include "versinfo.rc2"
+
+IDI_FILE ICON "res/file.ico"
+IDI_DIR ICON "res/dir.ico"
+IDI_FS ICON "res/fs.ico"

@@ -1,0 +1,6 @@
+LIBRARY "S3.SPL"
+
+EXPORTS
+    SalamanderPluginEntry
+    SalamanderPluginGetReqVer
+    SalamanderPluginGetSDKVer

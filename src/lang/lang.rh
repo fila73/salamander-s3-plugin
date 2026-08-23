@@ -1,0 +1,62 @@
+// Resource IDs for lang.rc
+#pragma once
+
+#ifndef IDC_STATIC
+#define IDC_STATIC (-1)
+#endif
+
+#define IDD_CONNECT                     520
+#define IDC_CATTREE                     537
+#define IDC_PROFILES_COMBO              526
+#define IDC_ACCESSKEY                   522
+#define IDC_SECRETKEY                   525
+#define IDC_PWDEYE                      580
+#define IDC_SESSIONTOKEN                524
+#define IDC_REGION                      538
+#define IDC_ENDPOINT                    535
+#define IDC_BUCKET                      521
+#define IDC_PATH                        531
+#define IDC_PATHSTYLE                   539
+#define IDC_USESSL                      546
+#define IDC_SESS_NEW                    581
+#define IDC_SESS_EDIT                   582
+#define IDC_SESS_RENAME                 583
+#define IDC_SESS_DELETE                 584
+#define IDC_SESS_SAVE                   585
+#define IDC_SESS_RELOAD_AWS             586
+#define IDC_SESSIONS                    587
+
+#define IDD_PROGRESSDLG                 540
+#define IDT_FILENAME                    541
+#define IDP_PROGRESSBAR                 542
+
+#define IDD_INPUT                       547
+#define IDC_INPUTPROMPT                 548
+#define IDC_INPUTVAL                    549
+
+#define IDS_PLUGINNAME                  1000
+#define IDS_PLUGINFSNAME                1001
+#define IDS_PLUGIN_DESCRIPTION          1002
+#define IDS_MENU_DISCONNECT             1003
+#define IDS_MENU_EDITFILE               1004
+#define IDS_MENU_CALCSIZE               1005
+#define IDS_VIEWER_OPENWNDS             1006
+#define IDS_TREE_CONNECTION             1007
+#define IDS_TREE_SAVED_SESSIONS         1008
+#define IDS_PROFILE_MANUAL              1009
+#define IDS_MSG_SAVED                   1010
+#define IDS_MSG_KEYS_EMPTY              1011
+#define IDS_TITLE_CONN_FAILED           1012
+#define IDS_ERR_DOWNLOAD                1013
+#define IDS_MSG_DISCONNECTED            1014
+#define IDS_MSG_CALCSIZE_DONE           1015
+#define IDS_CONFIRM_CANCEL_OP           1016
+#define IDS_TITLE_CONN_INFO             1017
+#define IDS_WARN_RENAME_BUCKET          1018
+#define IDS_TITLE_RENAME_ERR            1019
+#define IDS_TITLE_CREATE_BUCKET_ERR     1020
+#define IDS_TITLE_CREATE_FOLDER_ERR     1021
+#define IDS_TITLE_CONN_ERR              1022
+#define IDS_TITLE_PROPERTIES            1023
+#define IDS_REQUIRE_SAL500              1024
+

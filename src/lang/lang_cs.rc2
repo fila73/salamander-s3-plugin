@@ -1,0 +1,35 @@
+#ifdef APSTUDIO_INVOKED
+#error this file is not editable by Microsoft Visual C++
+#endif
+
+#include "versinfo.rh2"
+#include "versinfo.rc2"
+
+STRINGTABLE
+{
+ IDS_PLUGINNAME,             "Amazon S3"
+ IDS_PLUGINFSNAME,           "s3"
+ IDS_PLUGIN_DESCRIPTION,     "Klientský souborový systém pro cloudové úložiště Amazon S3 a kompatibilní služby."
+ IDS_MENU_DISCONNECT,        "&Odpojit S3"
+ IDS_MENU_EDITFILE,          "&Upravit soubor (S3)"
+ IDS_MENU_CALCSIZE,          "Spočítat &velikost složky"
+ IDS_VIEWER_OPENWNDS,        "Některá okna prohlížeče jsou otevřená. Chcete je zavřít?"
+ IDS_TREE_CONNECTION,        "Připojení"
+ IDS_TREE_SAVED_SESSIONS,    "Uložené relace"
+ IDS_PROFILE_MANUAL,         "<Vlastní / Ruční>"
+ IDS_MSG_SAVED,              "Konfigurace relace byla uložena."
+ IDS_MSG_KEYS_EMPTY,         "Přístupový klíč ID a tajný klíč nesmí být prázdné."
+ IDS_TITLE_CONN_FAILED,      "Připojení selhalo"
+ IDS_ERR_DOWNLOAD,           "Nelze stáhnout soubor:\n%s"
+ IDS_MSG_DISCONNECTED,       "Odpojeno od Amazon S3."
+ IDS_MSG_CALCSIZE_DONE,      "Výpočet velikosti složky byl dokončen."
+ IDS_CONFIRM_CANCEL_OP,      "Opravdu chcete operaci přerušit?"
+ IDS_TITLE_CONN_INFO,        "Informace o připojení S3"
+ IDS_WARN_RENAME_BUCKET,     "Přejmenování bucketů není podporováno."
+ IDS_TITLE_RENAME_ERR,       "Chyba při přejmenování/kopírování"
+ IDS_TITLE_CREATE_BUCKET_ERR, "Chyba při vytváření bucketu"
+ IDS_TITLE_CREATE_FOLDER_ERR, "Chyba při vytváření složky"
+ IDS_TITLE_CONN_ERR,         "Chyba připojení S3"
+ IDS_TITLE_PROPERTIES,       "Vlastnosti objektu S3"
+ IDS_REQUIRE_SAL500,         "Tento plugin vyžaduje Open Salamander 5.0 nebo novější."
+}

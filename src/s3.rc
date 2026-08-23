@@ -1,0 +1,47 @@
+// Microsoft Visual C++ generated resource script.
+#pragma code_page(65001)
+
+#include "s3.rh"
+
+#define APSTUDIO_READONLY_SYMBOLS
+#include "winresrc.h"
+#include "s3.rh2"
+#undef APSTUDIO_READONLY_SYMBOLS
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+#ifdef APSTUDIO_INVOKED
+1 TEXTINCLUDE 
+BEGIN
+    "s3.rh\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""winresrc.h""\r\n"
+    "#include ""s3.rh2""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEU)\r\n"
+    "LANGUAGE LANG_NEUTRAL,SUBLANG_NEUTRAL\r\n"
+    "#include ""s3.rc2""\r\n"
+    "#endif\r\n"
+    "\0"
+END
+#endif
+
+IDA_ACCELERATORS ACCELERATORS 
+BEGIN
+    "C",            101,         VIRTKEY, CONTROL, NOINVERT
+    "V",            102,        VIRTKEY, CONTROL, NOINVERT
+END
+
+#ifndef APSTUDIO_INVOKED
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEU)
+LANGUAGE LANG_NEUTRAL,SUBLANG_NEUTRAL
+#include "s3.rc2"
+#endif
+#endif

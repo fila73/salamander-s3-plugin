@@ -1,0 +1,35 @@
+#ifdef APSTUDIO_INVOKED
+#error this file is not editable by Microsoft Visual C++
+#endif
+
+#include "versinfo.rh2"
+#include "versinfo.rc2"
+
+STRINGTABLE
+{
+ IDS_PLUGINNAME,             "Amazon S3"
+ IDS_PLUGINFSNAME,           "s3"
+ IDS_PLUGIN_DESCRIPTION,     "Amazon S3 & S3-compatible cloud object storage client."
+ IDS_MENU_DISCONNECT,        "&Disconnect S3"
+ IDS_MENU_EDITFILE,          "&Edit File (S3)"
+ IDS_MENU_CALCSIZE,          "Calculate &Folder Size"
+ IDS_VIEWER_OPENWNDS,        "Some viewer windows are open. Do you want to close them?"
+ IDS_TREE_CONNECTION,        "Connection"
+ IDS_TREE_SAVED_SESSIONS,    "Saved Sessions"
+ IDS_PROFILE_MANUAL,         "<Manual / Custom>"
+ IDS_MSG_SAVED,              "Session configuration saved."
+ IDS_MSG_KEYS_EMPTY,         "Access Key ID and Secret Access Key cannot be empty."
+ IDS_TITLE_CONN_FAILED,      "Connection Failed"
+ IDS_ERR_DOWNLOAD,           "Cannot download file:\n%s"
+ IDS_MSG_DISCONNECTED,       "Disconnected from Amazon S3."
+ IDS_MSG_CALCSIZE_DONE,      "Folder size calculation completed."
+ IDS_CONFIRM_CANCEL_OP,      "Really cancel operation?"
+ IDS_TITLE_CONN_INFO,        "S3 Connection Info"
+ IDS_WARN_RENAME_BUCKET,     "Renaming buckets is not supported."
+ IDS_TITLE_RENAME_ERR,       "Rename Copy Error"
+ IDS_TITLE_CREATE_BUCKET_ERR, "Create Bucket Error"
+ IDS_TITLE_CREATE_FOLDER_ERR, "Create Folder Error"
+ IDS_TITLE_CONN_ERR,         "S3 Connection Error"
+ IDS_TITLE_PROPERTIES,       "S3 Object Properties"
+ IDS_REQUIRE_SAL500,         "This plugin requires Open Salamander 5.0 or later."
+}

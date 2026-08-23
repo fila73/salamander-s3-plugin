@@ -1,0 +1,108 @@
+// Microsoft Visual C++ generated resource script.
+#pragma code_page(65001)
+
+#include "lang.rh"
+
+#define APSTUDIO_READONLY_SYMBOLS
+#include "winresrc.h"
+#include "s3.rh2"
+#undef APSTUDIO_READONLY_SYMBOLS
+
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+
+#ifdef APSTUDIO_INVOKED
+1 TEXTINCLUDE 
+BEGIN
+    "lang.rh\0"
+END
+
+2 TEXTINCLUDE 
+BEGIN
+    "#include ""winresrc.h""\r\n"
+    "#include ""s3.rh2""\r\n"
+    "\0"
+END
+
+3 TEXTINCLUDE 
+BEGIN
+    "#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEU)\r\n"
+    "LANGUAGE LANG_NEUTRAL,SUBLANG_NEUTRAL\r\n"
+    "#include ""lang_cs.rc2""\r\n"
+    "#endif\r\n"
+    "\0"
+END
+#endif
+
+IDD_CONNECT DIALOGEX 20, 30, 360, 245
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+CAPTION "Připojení na Amazon S3 server"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    CONTROL         "",IDC_CATTREE,"SysTreeView32",0x800000 | 0x1 | 0x2 | 0x4 | 0x20 | WS_BORDER | WS_TABSTOP,7,7,112,207
+    
+    /* Page 0: Connection and AWS Profile */
+    GROUPBOX        "Přihlašovací údaje AWS && Profil",IDC_STATIC,126,3,226,90
+    LTEXT           "AWS &Profil (~/.aws/credentials):",IDC_STATIC,133,14,140,8
+    COMBOBOX        IDC_PROFILES_COMBO,133,24,140,120,CBS_DROPDOWNLIST | WS_VSCROLL | WS_TABSTOP
+    PUSHBUTTON      "Načíst",IDC_SESS_RELOAD_AWS,278,23,66,13
+    LTEXT           "&Přístupový klíč ID:",IDC_STATIC,133,40,90,8
+    EDITTEXT        IDC_ACCESSKEY,133,50,211,12,ES_AUTOHSCROLL | WS_GROUP
+    LTEXT           "&Tajný přístupový klíč:",IDC_STATIC,133,65,90,8
+    EDITTEXT        IDC_SECRETKEY,133,75,192,12,ES_AUTOHSCROLL | ES_PASSWORD
+    PUSHBUTTON      "",IDC_PWDEYE,328,74,16,13
+
+    GROUPBOX        "S3 Lokace && Region",IDC_STATIC,126,97,226,58
+    LTEXT           "&Region:",IDC_STATIC,133,108,50,8
+    COMBOBOX        IDC_REGION,133,118,90,100,CBS_DROPDOWN | WS_VSCROLL | WS_TABSTOP
+    LTEXT           "Výchozí &bucket (empty = all):",IDC_STATIC,230,108,114,8
+    EDITTEXT        IDC_BUCKET,230,118,114,12,ES_AUTOHSCROLL
+    LTEXT           "Výchozí &cesta:",IDC_STATIC,133,132,60,8
+    EDITTEXT        IDC_PATH,133,141,211,12,ES_AUTOHSCROLL
+
+    GROUPBOX        "Koncový bod && kompatibilita",IDC_STATIC,126,159,226,51
+    LTEXT           "Vlastní &koncový bod (MinIO / R2 / Wasabi):",IDC_STATIC,133,169,180,8
+    EDITTEXT        IDC_ENDPOINT,133,179,211,12,ES_AUTOHSCROLL
+    CONTROL         "Adresování ve stylu cesty",IDC_PATHSTYLE,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,133,195,95,10
+    CONTROL         "Použít HTTPS / SSL",IDC_USESSL,"Button",BS_AUTOCHECKBOX | WS_TABSTOP,235,195,80,10
+
+    /* Page 1: Saved Connections */
+    LISTBOX         IDC_SESSIONS,126,3,150,207,LBS_NOTIFY | WS_VSCROLL | WS_TABSTOP | NOT WS_VISIBLE
+    PUSHBUTTON      "&Nový",IDC_SESS_NEW,282,3,66,14,NOT WS_VISIBLE
+    PUSHBUTTON      "&Upravit",IDC_SESS_EDIT,282,21,66,14,NOT WS_VISIBLE
+    PUSHBUTTON      "U&ložit Current",IDC_SESS_SAVE,282,39,66,14,NOT WS_VISIBLE
+    PUSHBUTTON      "&Smazat",IDC_SESS_DELETE,282,57,66,14,NOT WS_VISIBLE
+    PUSHBUTTON      "&Přejmenovat",IDC_SESS_RENAME,282,75,66,14,NOT WS_VISIBLE
+
+    /* Bottom dialog buttons */
+    DEFPUSHBUTTON   "&Připojit",IDOK,185,223,52,14,WS_GROUP
+    PUSHBUTTON      "&Uložit...",IDC_SESS_SAVE,242,223,50,14
+    PUSHBUTTON      "&Zavřít",IDCANCEL,297,223,52,14
+END
+
+IDD_PROGRESSDLG DIALOGEX 18, 80, 353, 77
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_VISIBLE | WS_CAPTION
+CAPTION "Přenos Amazon S3"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    RTEXT           "Přenáší se:",IDC_STATIC,3,11,48,8
+    CONTROL         "",IDT_FILENAME,"Static",SS_LEFTNOWORDWRAP | SS_NOPREFIX | WS_GROUP,55,11,290,8
+    RTEXT           "Průběh:",IDC_STATIC,10,35,41,8
+    CONTROL         "",IDP_PROGRESSBAR,"Static",0,55,34,285,12
+    PUSHBUTTON      "Storno",IDCANCEL,151,57,50,14
+END
+
+IDD_INPUT DIALOGEX 0, 0, 240, 70
+STYLE DS_SETFONT | DS_MODALFRAME | DS_FIXEDSYS | WS_POPUP | WS_VISIBLE | WS_CAPTION | WS_SYSMENU
+CAPTION "Zadání hodnoty Amazon S3"
+FONT 8, "MS Shell Dlg", 400, 0, 0x1
+BEGIN
+    LTEXT           "Zadejte hodnotu:",IDC_INPUTPROMPT,14,10,212,12
+    EDITTEXT        IDC_INPUTVAL,14,24,212,14,ES_AUTOHSCROLL
+    DEFPUSHBUTTON   "OK",IDOK,65,48,50,14
+    PUSHBUTTON      "Storno",IDCANCEL,125,48,50,14
+END
+
+#if !defined(AFX_RESOURCE_DLL) || defined(AFX_TARG_NEU)
+LANGUAGE LANG_NEUTRAL, SUBLANG_NEUTRAL
+#include "lang_cs.rc2"
+#endif

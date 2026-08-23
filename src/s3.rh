@@ -1,0 +1,5 @@
+// Resource IDs for s3.rc
+#define IDA_ACCELERATORS 200
+#define IDI_FS 100
+#define IDI_DIR 101
+#define IDI_FILE 102
