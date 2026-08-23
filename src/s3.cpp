@@ -68,7 +68,7 @@ CPluginInterfaceAbstract* WINAPI SalamanderPluginEntry(CSalamanderPluginEntryAbs
     if (HLanguage == NULL)
         HLanguage = DLLInstance;
 
-    if (SalamanderVersion < 100)
+    if (SalamanderVersion < 102)
     {
         MessageBoxA(salamander->GetParentWindow(),
                     LoadStr(IDS_REQUIRE_SAL500),
