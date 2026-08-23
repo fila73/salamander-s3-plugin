@@ -75,29 +75,19 @@ protected:
 public:
     CPluginFSDataInterface(const char* path);
 
-    virtual BOOL WINAPI CallReleaseForFiles() { return TRUE; }
-    virtual BOOL WINAPI CallReleaseForDirs() { return TRUE; }
+    virtual BOOL WINAPI CallReleaseForFiles();
+    virtual BOOL WINAPI CallReleaseForDirs();
 
-    virtual void WINAPI ReleasePluginData(CFileData& file, BOOL isDir)
-    {
-        if (file.PluginData != 0)
-        {
-            delete (CFSData*)file.PluginData;
-            file.PluginData = 0;
-        }
-    }
+    virtual void WINAPI ReleasePluginData(CFileData& file, BOOL isDir);
 
-    virtual void WINAPI GetFileDataForUpDir(const char* archivePath, CFileData& upDir) {}
-    virtual BOOL WINAPI GetFileDataForNewDir(const char* dirName, CFileData& dir) { return FALSE; }
+    virtual void WINAPI GetFileDataForUpDir(const char* archivePath, CFileData& upDir);
+    virtual BOOL WINAPI GetFileDataForNewDir(const char* dirName, CFileData& dir);
 
     virtual HIMAGELIST WINAPI GetSimplePluginIcons(int iconSize);
-    virtual BOOL WINAPI HasSimplePluginIcon(CFileData& file, BOOL isDir) { return FALSE; }
+    virtual BOOL WINAPI HasSimplePluginIcon(CFileData& file, BOOL isDir);
     virtual HICON WINAPI GetPluginIcon(const CFileData* file, int iconSize, BOOL& destroyIcon);
 
-    virtual int WINAPI CompareFilesFromFS(const CFileData* file1, const CFileData* file2)
-    {
-        return strcmp(file1->Name, file2->Name);
-    }
+    virtual int WINAPI CompareFilesFromFS(const CFileData* file1, const CFileData* file2);
 
     virtual void WINAPI SetupView(BOOL leftPanel, CSalamanderViewAbstract* view, const char* archivePath,
                                   const CFileData* upperDir);
@@ -108,11 +98,11 @@ public:
                                            int selectedDirs, BOOL displaySize, const CQuadWord& selectedSize,
                                            char* buffer, DWORD* hotTexts, int& hotTextsCount);
 
-    virtual BOOL WINAPI CanBeCopiedToClipboard() { return TRUE; }
+    virtual BOOL WINAPI CanBeCopiedToClipboard();
 
-    virtual BOOL WINAPI GetByteSize(const CFileData* file, BOOL isDir, CQuadWord* size) { return FALSE; }
-    virtual BOOL WINAPI GetLastWriteDate(const CFileData* file, BOOL isDir, SYSTEMTIME* date) { return FALSE; }
-    virtual BOOL WINAPI GetLastWriteTime(const CFileData* file, BOOL isDir, SYSTEMTIME* time) { return FALSE; }
+    virtual BOOL WINAPI GetByteSize(const CFileData* file, BOOL isDir, CQuadWord* size);
+    virtual BOOL WINAPI GetLastWriteDate(const CFileData* file, BOOL isDir, SYSTEMTIME* date);
+    virtual BOOL WINAPI GetLastWriteTime(const CFileData* file, BOOL isDir, SYSTEMTIME* time);
 };
 
 class CPluginFSInterface : public CPluginFSInterfaceAbstract

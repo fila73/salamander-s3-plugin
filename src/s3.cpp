@@ -80,8 +80,11 @@ CPluginInterfaceAbstract* WINAPI SalamanderPluginEntry(CSalamanderPluginEntryAbs
     SalamanderGeneral->GetLowerAndUpperCase(&LowerCase, &UpperCase);
     SalamanderGUI = salamander->GetSalamanderGUI();
 
-    if (!InitializeWinLib(PluginNameEN, DLLInstance, SalamanderGeneral))
+    if (!InitializeWinLib(PluginNameEN, DLLInstance))
         return NULL;
+#ifdef USE_DARKMODELIB
+    InitializeWinLibDarkMode(SalamanderGeneral);
+#endif
 
     BOOL useDark = FALSE;
     if (SalamanderGeneral->GetConfigParameter(SALCFG_USEWINDOWSDARKMODE, &useDark, sizeof(useDark), NULL))
@@ -175,7 +178,7 @@ void WINAPI CPluginInterface::Connect(HWND parent, CSalamanderConnectAbstract* s
 void WINAPI CPluginInterface::ReleasePluginDataInterface(CPluginDataInterfaceAbstract* pluginData)
 {
     if (pluginData != NULL)
-        delete pluginData;
+        delete (CPluginFSDataInterface*)pluginData;
 }
 
 CPluginInterfaceForMenuExtAbstract* WINAPI CPluginInterface::GetInterfaceForMenuExt()

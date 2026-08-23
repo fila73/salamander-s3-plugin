@@ -28,7 +28,7 @@ RES = src/s3.res
 LANG_RES_EN = src/lang/lang_en.res
 LANG_RES_CS = src/lang/lang_cs.res
 
-all: s3.spl English.slg Czech.slg
+all: s3.spl english.slg czech.slg
 
 src/%.o: src/%.cpp
 	$(CXX) $(CXXFLAGS) -c $< -o $@
@@ -51,10 +51,10 @@ $(LANG_RES_CS): src/lang/lang_cs.rc
 s3.spl: $(OBJS) $(RES) src/s3.def
 	$(CXX) -shared -o $@ $(OBJS) $(RES) src/s3.def $(LDFLAGS)
 
-English.slg: $(LANG_RES_EN)
+english.slg: $(LANG_RES_EN)
 	$(CXX) -shared -nostdlib -o $@ $(LANG_RES_EN) -Wl,-e,0
 
-Czech.slg: $(LANG_RES_CS)
+czech.slg: $(LANG_RES_CS)
 	$(CXX) -shared -nostdlib -o $@ $(LANG_RES_CS) -Wl,-e,0
 
 clean:

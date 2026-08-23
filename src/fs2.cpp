@@ -456,7 +456,7 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
         FatalError = TRUE;
         return FALSE;
     }
-    iconsType = pitFromRegistry;
+    iconsType = pitSimple;
 
     dir->SetValidData(VALID_DATA_EXTENSION | VALID_DATA_SIZE | VALID_DATA_TYPE |
                       VALID_DATA_DATE | VALID_DATA_TIME | VALID_DATA_ATTRIBUTES |
@@ -465,8 +465,7 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
     // up-dir ".." if not at root
     if (strcmp(Path, "/") != 0)
     {
-        CFileData up;
-        memset(&up, 0, sizeof(up));
+        CFileData up = {};
         up.Name = SalamanderGeneral->DupStr("..");
         up.NameLen = 2;
         up.Ext = up.Name + up.NameLen;
@@ -475,6 +474,7 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
         up.DosName = NULL;
         up.PluginData = (DWORD_PTR)new CFSData("", "");
         up.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
+        up.NameW = NULL;
         if (up.Name != NULL)
         {
             dir->AddDir(NULL, up, pluginData);
@@ -497,10 +497,10 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
             return FALSE;
         }
 
-        for (const auto& b : buckets)
+        for (size_t i = 0; i < buckets.size(); ++i)
         {
-            CFileData fd;
-            memset(&fd, 0, sizeof(fd));
+            const auto& b = buckets[i];
+            CFileData fd = {};
             fd.Name = SalamanderGeneral->DupStr(b.Name.c_str());
             fd.NameLen = (int)b.Name.length();
             fd.Ext = fd.Name + fd.NameLen;
@@ -509,6 +509,8 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
             fd.LastWrite = b.CreationTime;
             fd.PluginData = (DWORD_PTR)new CFSData("BUCKET", "");
             fd.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
+            fd.DosName = NULL;
+            fd.NameW = NULL;
 
             dir->AddDir(NULL, fd, pluginData);
         }
@@ -526,8 +528,7 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
 
         for (const auto& item : items)
         {
-            CFileData fd;
-            memset(&fd, 0, sizeof(fd));
+            CFileData fd = {};
             fd.Name = SalamanderGeneral->DupStr(item.DisplayName.c_str());
             fd.NameLen = (int)item.DisplayName.length();
             if (item.IsDirectory)
@@ -546,6 +547,8 @@ BOOL WINAPI CPluginFSInterface::ListCurrentPath(CSalamanderDirectoryAbstract* di
             fd.LastWrite = item.LastWriteTime;
             fd.PluginData = (DWORD_PTR)new CFSData(item.StorageClass.c_str(), item.ETag.c_str());
             fd.IconOverlayIndex = ICONOVERLAYINDEX_NOTUSED;
+            fd.DosName = NULL;
+            fd.NameW = NULL;
 
             if (item.IsDirectory)
                 dir->AddDir(NULL, fd, pluginData);
@@ -581,7 +584,7 @@ BOOL WINAPI CPluginFSInterface::GetChangeDriveOrDisconnectItem(const char* fsNam
 {
     destroyIcon = FALSE;
     icon = LoadIcon(DLLInstance, MAKEINTRESOURCE(IDI_FS));
-    title = LoadStr(IDS_PLUGINNAME);
+    title = SalamanderGeneral->DupStr(LoadStr(IDS_PLUGINNAME));
     return TRUE;
 }
 
@@ -1108,15 +1111,55 @@ CPluginFSDataInterface::CPluginFSDataInterface(const char* path)
     Name = Path;
 }
 
+BOOL WINAPI CPluginFSDataInterface::CallReleaseForFiles()
+{
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFSDataInterface::CallReleaseForDirs()
+{
+    return TRUE;
+}
+
+void WINAPI CPluginFSDataInterface::ReleasePluginData(CFileData& file, BOOL isDir)
+{
+    if (file.PluginData != 0)
+    {
+        delete (CFSData*)file.PluginData;
+        file.PluginData = 0;
+    }
+}
+
+void WINAPI CPluginFSDataInterface::GetFileDataForUpDir(const char* archivePath, CFileData& upDir)
+{
+}
+
+BOOL WINAPI CPluginFSDataInterface::GetFileDataForNewDir(const char* dirName, CFileData& dir)
+{
+    return FALSE;
+}
+
 HIMAGELIST WINAPI CPluginFSDataInterface::GetSimplePluginIcons(int iconSize)
 {
     return DFSImageList;
+}
+
+BOOL WINAPI CPluginFSDataInterface::HasSimplePluginIcon(CFileData& file, BOOL isDir)
+{
+    return FALSE;
 }
 
 HICON WINAPI CPluginFSDataInterface::GetPluginIcon(const CFileData* file, int iconSize, BOOL& destroyIcon)
 {
     destroyIcon = FALSE;
     return NULL;
+}
+
+int WINAPI CPluginFSDataInterface::CompareFilesFromFS(const CFileData* file1, const CFileData* file2)
+{
+    if (file1 == NULL || file1->Name == NULL) return -1;
+    if (file2 == NULL || file2->Name == NULL) return 1;
+    return strcmp(file1->Name, file2->Name);
 }
 
 void WINAPI CPluginFSDataInterface::SetupView(BOOL leftPanel, CSalamanderViewAbstract* view,
@@ -1147,5 +1190,25 @@ BOOL WINAPI CPluginFSDataInterface::GetInfoLineContent(int panel, const CFileDat
             return TRUE;
         }
     }
+    return FALSE;
+}
+
+BOOL WINAPI CPluginFSDataInterface::CanBeCopiedToClipboard()
+{
+    return TRUE;
+}
+
+BOOL WINAPI CPluginFSDataInterface::GetByteSize(const CFileData* file, BOOL isDir, CQuadWord* size)
+{
+    return FALSE;
+}
+
+BOOL WINAPI CPluginFSDataInterface::GetLastWriteDate(const CFileData* file, BOOL isDir, SYSTEMTIME* date)
+{
+    return FALSE;
+}
+
+BOOL WINAPI CPluginFSDataInterface::GetLastWriteTime(const CFileData* file, BOOL isDir, SYSTEMTIME* time)
+{
     return FALSE;
 }
