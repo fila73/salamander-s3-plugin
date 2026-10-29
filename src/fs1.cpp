@@ -136,7 +136,8 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
         }
         // Fresh, unique temp folder: never overwrite an existing file in %TEMP%.
         char tmpBase[MAX_PATH], tmpDir[MAX_PATH], tmpFile[MAX_PATH];
-        if (GetTempPathA(MAX_PATH, tmpBase) == 0 || GetTempPathA(MAX_PATH, tmpBase) >= MAX_PATH)
+        DWORD tmpLen = GetTempPathA(MAX_PATH, tmpBase);
+        if (tmpLen == 0 || tmpLen >= MAX_PATH)
             return;
         bool haveDir = false;
         for (int attempt = 0; attempt < 100 && !haveDir; attempt++)

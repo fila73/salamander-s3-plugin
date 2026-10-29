@@ -1066,13 +1066,15 @@ bool CS3Connection::CopyObject(const std::string& srcBucket, const std::string& 
     return S3CopyResultOk(statusCode, body, outError);
 }
 
-bool CS3Connection::StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError)
+bool CS3Connection::StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError, DWORD* outHttpStatus)
 {
     std::string body;
     std::map<std::string, std::string> respHeaders;
     DWORD statusCode = 0;
 
-    if (!SendS3Request("HEAD", bucket, key, {}, {}, nullptr, 0, body, respHeaders, statusCode, outError))
+    bool sent = SendS3Request("HEAD", bucket, key, {}, {}, nullptr, 0, body, respHeaders, statusCode, outError);
+    if (outHttpStatus) *outHttpStatus = statusCode;
+    if (!sent)
     {
         return false;
     }

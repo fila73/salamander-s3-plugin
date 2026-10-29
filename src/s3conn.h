@@ -136,7 +136,7 @@ public:
     bool CreateBucket(const std::string& bucket, const std::string& region, std::string& outError);
     bool CreateFolder(const std::string& bucket, const std::string& prefix, std::string& outError);
     bool CopyObject(const std::string& srcBucket, const std::string& srcKey, const std::string& dstBucket, const std::string& dstKey, std::string& outError);
-    bool StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError);
+    bool StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError, DWORD* outHttpStatus = nullptr);
     bool CalculatePrefixSize(
         const std::string& bucket,
         const std::string& prefix,

@@ -211,6 +211,13 @@ static bool S3GlueTransferProgress(void* ctx, const char* name, uint64_t done, u
     return !g_ProgDlg->GetWantCancel();
 }
 
+HWND S3ProgressWindow()
+{
+    if (g_ProgDlg != NULL && g_ProgDlg->HWindow != NULL)
+        return g_ProgDlg->HWindow;
+    return SalamanderGeneral->GetMsgBoxParent();
+}
+
 void S3ProgressBegin(HWND parent)
 {
     S3TransferOpReset(parent);
@@ -653,9 +660,10 @@ static bool S3KeyExists(const std::string& bucket, const std::string& key, bool 
         if (!items.empty()) return true;
     }
     S3ObjectInfo info;
-    if (S3Conn.StatObject(bucket, key, info, err))
+    DWORD httpStatus = 0;
+    if (S3Conn.StatObject(bucket, key, info, err, &httpStatus))
         return true;
-    if (err.find("404") == std::string::npos)
+    if (httpStatus != 404)
         outUnknown = true;
     return false;
 }

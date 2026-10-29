@@ -262,6 +262,36 @@ static bool Junction(const std::wstring& link, const std::wstring& target)
     return _wsystem(cmd.c_str()) == 0;
 }
 
+static void TestCloudReparseIsNotLink()
+{
+    // OneDrive folders are Directory|ReparsePoint with a cloud-files tag: not a link.
+    char* up = getenv("USERPROFILE");
+    if (!up) return;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((std::string(up) + "/OneDrive*").c_str(), &fd);
+    if (h == INVALID_HANDLE_VALUE) { puts("note: no OneDrive folder, skipped"); return; }
+    do
+    {
+        std::string od = std::string(up) + "/" + fd.cFileName;
+        if (fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT)
+        {
+            printf("note: %s is a reparse point, tag=%08lx\n", od.c_str(), fd.dwReserved0);
+            CHECK(!S3IsLinkPath(od.c_str()));
+        }
+    } while (FindNextFileA(h, &fd));
+    FindClose(h);
+}
+
+static void TestDownloadableKey()
+{
+    CHECK(S3IsDownloadableKey("a/b/c"));
+    CHECK(S3IsDownloadableKey("a/b/"));
+    CHECK(!S3IsDownloadableKey(""));
+    CHECK(!S3IsDownloadableKey("/x"));
+    CHECK(!S3IsDownloadableKey("a//x"));
+    CHECK(!S3IsDownloadableKey("a//"));
+}
+
 static void TestJunctionAndFinishMove()
 {
     std::wstring root = g_dir + L"\\mv";
@@ -278,6 +308,8 @@ static void TestJunctionAndFinishMove()
     if (haveJ)
     {
         CHECK(S3IsReparseAttr(GetFileAttributesW(link.c_str())));
+        CHECK(S3IsLinkPath(Narrow(link).c_str()));          // junction is a link
+        CHECK(!S3IsLinkPath(Narrow(victim).c_str()));       // plain folder is not
         // nested junction is never followed
         S3LocalDeleteTree(rootA, true);
         CHECK(Exists(victim + L"\\precious.txt"));        // junction target untouched
@@ -348,6 +380,8 @@ int main()
     TestReservedNamesMore();
     TestWrittenSet();
     TestJunctionAndFinishMove();
+    TestCloudReparseIsNotLink();
+    TestDownloadableKey();
     TestDeleteDepthLimit();
 
     RemoveDirectoryW(g_dir.c_str());

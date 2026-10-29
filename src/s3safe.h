@@ -269,6 +269,14 @@ inline bool S3IsSafeLocalComponent(const std::string& name, const std::string& k
     return true;
 }
 
+// A key that can be addressed after S3Normalize (which collapses "//"): non-empty, no leading '/',
+// no empty component. Others cannot be downloaded safely (a CommonPrefix like "a//" would re-list itself).
+inline bool S3IsDownloadableKey(const std::string& key)
+{
+    if (key.empty() || key[0] == '/') return false;
+    return key.find("//") == std::string::npos;
+}
+
 // Last component of an S3 path/key ("a/b/c.txt" -> "c.txt", trailing '/' ignored).
 inline std::string S3LastComponent(const std::string& path)
 {
@@ -290,6 +298,24 @@ static const int S3_MAX_RECURSION_DEPTH = 64;
 inline bool S3IsReparseAttr(DWORD attr)
 {
     return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
+// True if the item at path must be treated as a link (junction, symlink, mount point): a reparse
+// point whose tag is a name surrogate. Other reparse points (OneDrive/cloud files, dedup, WIM...)
+// are ordinary folders/files. Unreadable tag counts as a link (safe side).
+inline bool S3IsLinkPath(const char* path)
+{
+    DWORD attr = GetFileAttributesA(path);
+    if (!S3IsReparseAttr(attr))
+        return false;
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA(path, &fd);
+    if (h == INVALID_HANDLE_VALUE)
+        return true;
+    FindClose(h);
+    if (!(fd.dwFileAttributes & FILE_ATTRIBUTE_REPARSE_POINT))
+        return true;
+    return IsReparseTagNameSurrogate(fd.dwReserved0) != 0;
 }
 
 // Case-insensitive form of a local path (NTFS is case-insensitive).
@@ -322,8 +348,7 @@ inline bool S3LocalDeleteTree(const std::string& path, bool isDir, int depth = 0
         SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_NORMAL);
         return DeleteFileA(path.c_str()) != 0;
     }
-    DWORD attr = GetFileAttributesA(path.c_str());
-    if (S3IsReparseAttr(attr))
+    if (S3IsLinkPath(path.c_str()))
         return depth == 0 && RemoveDirectoryA(path.c_str()) != 0; // only the link, never the target
     if (depth >= S3_MAX_RECURSION_DEPTH)
         return false;
@@ -336,7 +361,7 @@ inline bool S3LocalDeleteTree(const std::string& path, bool isDir, int depth = 0
         {
             if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
             bool sub = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            if (sub && S3IsReparseAttr(fd.dwFileAttributes)) continue; // keep nested links
+            if (sub && S3IsReparseAttr(fd.dwFileAttributes) && IsReparseTagNameSurrogate(fd.dwReserved0)) continue; // keep nested links
             S3LocalDeleteTree(path + "\\" + fd.cFileName, sub, depth + 1);
         } while (FindNextFileA(h, &fd));
         FindClose(h);

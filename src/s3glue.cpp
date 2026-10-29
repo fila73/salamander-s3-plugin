@@ -515,19 +515,18 @@ static bool S3IsCancelError(const std::string& err)
 // Per-operation state of downloads: local files written so far (case-insensitive) and the
 // remembered "overwrite all" / "skip all" answer.
 static S3WrittenSet g_S3Written;
-static HWND g_S3OpParent = NULL;
-static int g_S3OverwriteAnswer = 0; // 0 = ask, IDYES = overwrite all, IDNO = skip all
+static int g_S3OverwriteAnswer = 0; // 0 = ask, DIALOG_ALL = overwrite all, DIALOG_SKIPALL = skip all
 
 void S3TransferOpReset(HWND parent)
 {
     g_S3Written.Clear();
-    g_S3OpParent = parent;
+    (void)parent;
     g_S3OverwriteAnswer = 0;
 }
 
 // Decides whether localFile may be written. Fails the item on a case-insensitive name clash with a
 // file written earlier in this operation, or when the user declines to overwrite an existing file.
-static bool S3ClaimDownloadTarget(const char* localFile, std::string& outError)
+static bool S3ClaimDownloadTarget(const char* localFile, const char* s3Path, int64_t expectedSize, std::string& outError)
 {
     std::wstring w = AnsiToWide(localFile);
     if (!g_S3Written.Claim(w))
@@ -540,19 +539,37 @@ static bool S3ClaimDownloadTarget(const char* localFile, std::string& outError)
         return true;
     if (g_S3OverwriteAnswer == 0)
     {
-        std::string msg = std::string("The file already exists:\n") + localFile +
-                          "\n\nYes = overwrite (and overwrite all following)\nNo = skip (and skip all following)\nCancel = stop";
-        int a = SalamanderGeneral->SalMessageBox(g_S3OpParent, msg.c_str(), LoadStr(IDS_PLUGINNAME),
-                                                 MB_YESNOCANCEL | MB_ICONQUESTION);
-        if (a == IDCANCEL)
+        // Standard Salamander overwrite dialog (Yes / All / Skip / Skip all / Cancel). The owner is the
+        // progress dialog: the main window is disabled while it is open.
+        WIN32_FILE_ATTRIBUTE_DATA ex;
+        char localData[64] = "";
+        if (GetFileAttributesExA(localFile, GetFileExInfoStandard, &ex))
+        {
+            unsigned long long sz = ((unsigned long long)ex.nFileSizeHigh << 32) | ex.nFileSizeLow;
+            snprintf(localData, sizeof(localData), "%llu bytes", sz);
+        }
+        char remoteData[64] = "";
+        if (expectedSize >= 0)
+            snprintf(remoteData, sizeof(remoteData), "%llu bytes", (unsigned long long)expectedSize);
+        int a = SalamanderGeneral->DialogOverwrite(S3ProgressWindow(), BUTTONS_YESALLSKIPCANCEL,
+                                                   localFile, localData, s3Path, remoteData);
+        if (a == DIALOG_CANCEL || a == DIALOG_FAIL)
         {
             outError = "Download canceled by user.";
             return false;
         }
-        g_S3OverwriteAnswer = (a == IDYES) ? IDYES : IDNO;
+        if (a == DIALOG_YES)
+            return true; // this file only
+        if (a == DIALOG_ALL || a == DIALOG_SKIPALL)
+            g_S3OverwriteAnswer = a;
+        // DIALOG_SKIP: skip just this file (falls through to the skip below)
+        if (a == DIALOG_SKIP)
+            g_S3OverwriteAnswer = DIALOG_SKIP;
     }
-    if (g_S3OverwriteAnswer == IDYES)
+    if (g_S3OverwriteAnswer == DIALOG_ALL)
         return true;
+    if (g_S3OverwriteAnswer == DIALOG_SKIP)
+        g_S3OverwriteAnswer = 0; // one-off skip, ask again next time
     outError = "Skipped, the file already exists locally.";
     return false;
 }
@@ -560,7 +577,7 @@ static bool S3ClaimDownloadTarget(const char* localFile, std::string& outError)
 static bool S3DownloadOneFile(const std::string& s3Path, const char* localFile, int64_t expectedSize,
                               std::string& outError, S3TransferReport* report)
 {
-    bool ok = S3ClaimDownloadTarget(localFile, outError) &&
+    bool ok = S3ClaimDownloadTarget(localFile, s3Path.c_str(), expectedSize, outError) &&
               S3DownloadSingleFile(s3Path.c_str(), localFile, outError, expectedSize);
     if (ok)
     {
@@ -573,7 +590,7 @@ static bool S3DownloadOneFile(const std::string& s3Path, const char* localFile, 
 }
 
 bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError,
-                         S3TransferReport* report, int64_t expectedSize)
+                         S3TransferReport* report, int64_t expectedSize, int depth)
 {
     if (!isDir)
     {
@@ -587,6 +604,13 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         char localTargetFile[MAX_PATH * 2];
         snprintf(localTargetFile, sizeof(localTargetFile), "%s\\%s", localTargetDir, name);
         return S3DownloadOneFile(s3Path, localTargetFile, expectedSize, outError, report);
+    }
+
+    if (depth >= S3_MAX_RECURSION_DEPTH)
+    {
+        outError = "Skipped, folders are nested deeper than 64 levels.";
+        S3ReportFail(report, s3Path, outError);
+        return false;
     }
 
     std::string bucket, prefix;
@@ -629,9 +653,17 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         snprintf(itemS3Path, sizeof(itemS3Path), "/%s/%s", bucket.c_str(), item.Key.c_str());
         std::string childErr;
         bool ok;
-        if (item.IsDirectory)
+        if (!S3IsDownloadableKey(item.Key))
         {
-            ok = S3DownloadRecursive(itemS3Path, subLocalDir, true, childErr, report);
+            // Empty name / "//" in the key: the path would be normalized to a different (or the same)
+            // prefix, which could re-list it forever. Refuse; the object stays on S3.
+            ok = false;
+            childErr = "Skipped, the key \"" + item.Key + "\" has an empty path component.";
+            S3ReportFail(report, itemS3Path, childErr);
+        }
+        else if (item.IsDirectory)
+        {
+            ok = S3DownloadRecursive(itemS3Path, subLocalDir, true, childErr, report, -1, depth + 1);
         }
         else if (!S3IsSafeLocalComponent(item.DisplayName, item.Key, childErr))
         {
@@ -701,7 +733,7 @@ static bool S3UploadRecursiveImpl(const char* localPath, const char* s3TargetDir
 
     // Junctions / directory symlinks are leaves: never followed, never reported as transferred,
     // so they (and every parent folder) stay on disk after a Move.
-    if (S3IsReparseAttr(GetFileAttributesA(localPath)))
+    if (S3IsLinkPath(localPath))
     {
         outError = "Skipped, folder is a junction or symbolic link (not followed).";
         S3ReportFail(report, localPath, outError);
@@ -858,7 +890,3 @@ bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError)
     return true;
 }
 
-void S3LocalDeleteRecursive(const char* localPath, bool isDir)
-{
-    S3LocalDeleteTree(localPath, isDir);
-}
