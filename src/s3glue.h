@@ -6,6 +6,7 @@
 
 #include "s3conn.h"
 #include "awscred.h"
+#include "s3safe.h"
 
 extern CS3Connection S3Conn;
 extern S3Profile S3ActiveProfile;
@@ -37,13 +38,17 @@ void S3CalcSize(HWND parent, const char* remoteDir, int panel);
 typedef bool (*S3GlueProgressFn)(void* ctx, const char* name, uint64_t done, uint64_t total);
 void S3SetProgressCallback(S3GlueProgressFn cb, void* ctx);
 void S3ProgressBegin(HWND parent);
+HWND S3ProgressWindow(); // owner for modal prompts during a transfer (progress dialog; never the disabled main window)
 void S3ProgressEnd();
 bool S3ProgressUpdateStatus(const char* text);
 bool S3ProgressCheckCancel();
 
-bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::string& outError);
+bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::string& outError, int64_t expectedSize = -1);
 bool S3UploadSingleFile(const char* localFilePath, const char* s3Path, std::string& outError);
-bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError);
-bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError);
+bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError,
+                         S3TransferReport* report = nullptr, int64_t expectedSize = -1, int depth = 0);
+bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError,
+                       S3TransferReport* report = nullptr);
 bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError);
-void S3LocalDeleteRecursive(const char* localPath, bool isDir);
+bool S3DeleteFolderIfEmpty(const char* s3Path, std::string& outError);
+void S3TransferOpReset(HWND parent); // call at the start of each copy/move operation

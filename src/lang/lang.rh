@@ -23,6 +23,7 @@
 #define IDC_SESS_RENAME                 583
 #define IDC_SESS_DELETE                 584
 #define IDC_SESS_SAVE                   585
+#define IDC_SESS_SAVECUR                588
 #define IDC_SESS_RELOAD_AWS             586
 #define IDC_SESSIONS                    587
 

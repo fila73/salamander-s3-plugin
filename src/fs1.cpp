@@ -127,14 +127,39 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
         SalamanderGeneral->SetUserWorkedOnPanelPath(panel);
         char remote[MAX_PATH];
         S3Join(fs->Path, file.Name, remote, MAX_PATH);
-        char tmpDir[MAX_PATH], tmpFile[MAX_PATH];
-        GetTempPathA(MAX_PATH, tmpDir);
+        std::string nameErr;
+        if (!S3IsSafeLocalComponent(file.Name, remote, nameErr))
+        {
+            SalamanderGeneral->SalMessageBox(SalamanderGeneral->GetMsgBoxParent(), nameErr.c_str(),
+                                             LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
+        // Fresh, unique temp folder: never overwrite an existing file in %TEMP%.
+        char tmpBase[MAX_PATH], tmpDir[MAX_PATH], tmpFile[MAX_PATH];
+        DWORD tmpLen = GetTempPathA(MAX_PATH, tmpBase);
+        if (tmpLen == 0 || tmpLen >= MAX_PATH)
+            return;
+        bool haveDir = false;
+        for (int attempt = 0; attempt < 100 && !haveDir; attempt++)
+        {
+            char sub[64];
+            snprintf(sub, sizeof(sub), "s3plugin_%lu_%lu_%d", GetCurrentProcessId(), GetTickCount(), attempt);
+            lstrcpynA(tmpDir, tmpBase, MAX_PATH);
+            if (!SalamanderGeneral->SalPathAppend(tmpDir, sub, MAX_PATH))
+                break;
+            haveDir = CreateDirectoryA(tmpDir, NULL) != 0; // fails if it already exists
+        }
         lstrcpynA(tmpFile, tmpDir, MAX_PATH);
-        SalamanderGeneral->SalPathAppend(tmpFile, file.Name, MAX_PATH);
+        if (!haveDir || !SalamanderGeneral->SalPathAppend(tmpFile, file.Name, MAX_PATH))
+        {
+            SalamanderGeneral->SalMessageBox(SalamanderGeneral->GetMsgBoxParent(), "Cannot create a temporary file for the download.",
+                                             LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
         HWND parent = SalamanderGeneral->GetMsgBoxParent();
         std::string err;
         S3ProgressBegin(parent);
-        if (S3EnsureConnected(parent) && S3DownloadSingleFile(remote, tmpFile, err))
+        if (S3EnsureConnected(parent) && S3DownloadSingleFile(remote, tmpFile, err, (int64_t)file.Size.Value))
         {
             S3ProgressEnd();
             ShellExecuteA(SalamanderGeneral->GetMainWindowHWND(), "open", tmpFile, NULL, tmpDir, SW_SHOWNORMAL);
@@ -261,7 +286,7 @@ static void ShowConnectPage(HWND hDlg, int page)
     while (hChild != NULL)
     {
         int id = GetDlgCtrlID(hChild);
-        if (id != IDC_CATTREE && id != IDOK && id != IDC_SESS_SAVE && id != IDCANCEL)
+        if (id != IDC_CATTREE && id != IDOK && id != IDC_SESS_SAVE && id != IDC_SESS_SAVECUR && id != IDCANCEL)
         {
             if (id == IDC_SESSIONS || id == IDC_SESS_NEW || id == IDC_SESS_EDIT ||
                 id == IDC_SESS_DELETE || id == IDC_SESS_RENAME)
@@ -431,6 +456,7 @@ static INT_PTR CALLBACK ConnectDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         }
 
         case IDC_SESS_SAVE:
+        case IDC_SESS_SAVECUR:
         {
             S3Profile prof;
             ReadProfileFromDialog(hDlg, prof);

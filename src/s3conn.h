@@ -83,6 +83,15 @@ private:
         std::string& outError
     );
 
+    bool UploadFileStreaming(
+        const std::string& bucket,
+        const std::string& key,
+        const wchar_t* localFilePath,
+        S3ProgressCallback progressCb,
+        void* userData,
+        std::string& outError
+    );
+
 public:
     CS3Connection();
     ~CS3Connection();
@@ -109,7 +118,8 @@ public:
         uint64_t resumeOffset,
         S3ProgressCallback progressCb,
         void* userData,
-        std::string& outError
+        std::string& outError,
+        int64_t expectedSize = -1 // size from the listing, -1 = unknown
     );
 
     bool UploadFile(
@@ -126,7 +136,7 @@ public:
     bool CreateBucket(const std::string& bucket, const std::string& region, std::string& outError);
     bool CreateFolder(const std::string& bucket, const std::string& prefix, std::string& outError);
     bool CopyObject(const std::string& srcBucket, const std::string& srcKey, const std::string& dstBucket, const std::string& dstKey, std::string& outError);
-    bool StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError);
+    bool StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError, DWORD* outHttpStatus = nullptr);
     bool CalculatePrefixSize(
         const std::string& bucket,
         const std::string& prefix,

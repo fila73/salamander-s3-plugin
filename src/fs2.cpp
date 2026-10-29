@@ -211,8 +211,16 @@ static bool S3GlueTransferProgress(void* ctx, const char* name, uint64_t done, u
     return !g_ProgDlg->GetWantCancel();
 }
 
+HWND S3ProgressWindow()
+{
+    if (g_ProgDlg != NULL && g_ProgDlg->HWindow != NULL)
+        return g_ProgDlg->HWindow;
+    return SalamanderGeneral->GetMsgBoxParent();
+}
+
 void S3ProgressBegin(HWND parent)
 {
+    S3TransferOpReset(parent);
     g_ProgMainWnd = parent;
     HWND pw;
     while ((pw = GetParent(g_ProgMainWnd)) != NULL && IsWindowEnabled(pw))
@@ -639,6 +647,27 @@ BOOL WINAPI CPluginFSInterface::ExecuteCommandLine(HWND parent, char* command, i
     return FALSE;
 }
 
+// True if the object/folder at key exists. Fails closed: any error other than "404" counts as
+// "cannot verify" (outUnknown) so that the caller refuses instead of overwriting.
+static bool S3KeyExists(const std::string& bucket, const std::string& key, bool isFolder, bool& outUnknown)
+{
+    outUnknown = false;
+    std::string err;
+    if (isFolder)
+    {
+        std::vector<S3ObjectInfo> items;
+        if (!S3Conn.ListDirectory(bucket, key, items, err)) { outUnknown = true; return false; }
+        if (!items.empty()) return true;
+    }
+    S3ObjectInfo info;
+    DWORD httpStatus = 0;
+    if (S3Conn.StatObject(bucket, key, info, err, &httpStatus))
+        return true;
+    if (httpStatus != 404)
+        outUnknown = true;
+    return false;
+}
+
 BOOL WINAPI CPluginFSInterface::QuickRename(const char* fsName, int mode, HWND parent, CFileData& file, BOOL isDir,
                                             char* newName, BOOL& cancel)
 {
@@ -667,13 +696,46 @@ BOOL WINAPI CPluginFSInterface::QuickRename(const char* fsName, int mode, HWND p
         newKey += newName;
 
         std::string err;
+        if (newKey == oldKey || newKey.empty())
+        {
+            SalamanderGeneral->SalMessageBox(parent, "The new name is the same as the old one (or empty); nothing was renamed.",
+                                             LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONWARNING);
+            return FALSE;
+        }
+        bool unknown = false;
+        if (S3KeyExists(bucket, newKey, false, unknown) || unknown)
+        {
+            std::string msg = unknown ? "Cannot verify that the new name is free, nothing was renamed."
+                                      : "An object named \"" + newKey + "\" already exists; nothing was renamed.";
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            return FALSE;
+        }
         if (!S3Conn.CopyObject(bucket, oldKey, bucket, newKey, err))
         {
             SalamanderGeneral->SalMessageBox(parent, err.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
             return FALSE;
         }
+        {
+            // The copy must be visible before the source is deleted.
+            S3ObjectInfo chk;
+            std::string chkErr;
+            if (!S3Conn.StatObject(bucket, newKey, chk, chkErr))
+            {
+                std::string msg = "The copy could not be verified, the old object was NOT deleted:\n" + chkErr;
+                SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+                SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+                return FALSE;
+            }
+        }
 
-        S3Conn.DeleteObject(bucket, oldKey, err);
+        if (!S3Conn.DeleteObject(bucket, oldKey, err))
+        {
+            std::string msg = "The file was copied to the new name, but the old object \"" + oldKey +
+                              "\" could not be deleted:\n" + err;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
     }
     else
     {
@@ -687,24 +749,92 @@ BOOL WINAPI CPluginFSInterface::QuickRename(const char* fsName, int mode, HWND p
         newPrefix += newName;
         newPrefix += "/";
 
-        std::vector<S3ObjectInfo> objects;
-        std::string err;
-        if (S3Conn.ListRecursiveObjects(bucket, oldPrefix, objects, err))
+        // Never rename a folder onto itself or into itself (copy+delete would destroy the data).
+        if (newPrefix.compare(0, oldPrefix.size(), oldPrefix) == 0 || newPrefix == "/" || newName[0] == 0)
         {
-            for (const auto& obj : objects)
+            SalamanderGeneral->SalMessageBox(parent, "The new folder name is the same as the old one, empty, or inside the old folder; nothing was renamed.",
+                                             LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONWARNING);
+            return FALSE;
+        }
+        {
+            bool unknown = false;
+            if (S3KeyExists(bucket, newPrefix, true, unknown) || unknown)
             {
-                std::string rel = obj.Key.substr(oldPrefix.length());
-                std::string targetKey = newPrefix + rel;
-                std::string cErr;
-                if (S3Conn.CopyObject(bucket, obj.Key, bucket, targetKey, cErr))
-                {
-                    S3Conn.DeleteObject(bucket, obj.Key, cErr);
-                }
+                std::string msg = unknown ? "Cannot verify that the new folder name is free, nothing was renamed."
+                                          : "A folder named \"" + newPrefix + "\" already exists; nothing was renamed.";
+                SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+                return FALSE;
             }
         }
 
-        S3Conn.CreateFolder(bucket, newPrefix, err);
-        S3Conn.DeleteObject(bucket, oldPrefix, err);
+        std::vector<S3ObjectInfo> objects;
+        std::string err;
+        if (!S3Conn.ListRecursiveObjects(bucket, oldPrefix, objects, err))
+        {
+            // Without a complete listing nothing is copied or deleted.
+            std::string msg = "Cannot list the folder, nothing was renamed:\n" + err;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            return FALSE;
+        }
+
+        // Phase 1: copy everything; stop at the first failure and keep the old prefix untouched.
+        size_t copiedOk = 0;
+        std::string failMsg;
+        for (const auto& obj : objects)
+        {
+            std::string targetKey;
+            std::string cErr;
+            if (!S3MapRenameKey(oldPrefix, newPrefix, obj.Key, targetKey))
+            {
+                failMsg = "Unexpected key \"" + obj.Key + "\" in listing.";
+                break;
+            }
+            if (!S3Conn.CopyObject(bucket, obj.Key, bucket, targetKey, cErr))
+            {
+                failMsg = "Copy of \"" + obj.Key + "\" failed: " + cErr;
+                break;
+            }
+            copiedOk++;
+        }
+        if (failMsg.empty() && !S3Conn.CreateFolder(bucket, newPrefix, err))
+            failMsg = "Cannot create the new folder: " + err;
+
+        if (!failMsg.empty() || !S3MayDeleteOldPrefix(objects.size(), copiedOk, true))
+        {
+            std::string msg = failMsg + "\n\nThe old folder was NOT deleted (" + std::to_string(copiedOk) + " of " +
+                              std::to_string(objects.size()) + " objects were already copied to the new name).";
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
+
+        // Phase 2: every copy succeeded, now remove the old objects; report failures.
+        std::string delFail;
+        size_t delFailCount = 0;
+        for (const auto& obj : objects)
+        {
+            std::string dErr;
+            if (obj.Key == oldPrefix)
+                continue; // the old folder marker is deleted below
+            if (!S3Conn.DeleteObject(bucket, obj.Key, dErr))
+            {
+                if (delFailCount++ < 3) delFail += "\n\"" + obj.Key + "\": " + dErr;
+            }
+        }
+        std::string mErr;
+        if (delFailCount == 0 && !S3Conn.DeleteObject(bucket, oldPrefix, mErr))
+        {
+            delFail += "\n\"" + oldPrefix + "\": " + mErr;
+            delFailCount++;
+        }
+        if (delFailCount > 0)
+        {
+            std::string msg = "The folder was copied to the new name, but " + std::to_string(delFailCount) +
+                              " old object(s) could not be deleted:" + delFail;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
     }
 
     SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
@@ -757,6 +887,15 @@ void WINAPI CPluginFSInterface::ViewFile(const char* fsName, HWND parent,
                                         CSalamanderForViewFileOnFSAbstract* salamander,
                                         CFileData& file)
 {
+    {
+        std::string nameErr;
+        if (!S3IsSafeLocalComponent(file.Name, std::string(Path) + "/" + file.Name, nameErr))
+        {
+            SalamanderGeneral->SalMessageBox(parent, nameErr.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
+    }
+
     char uniqueFileName[2 * MAX_PATH];
     strcpy(uniqueFileName, fsName);
     strcat(uniqueFileName, ":");
@@ -867,6 +1006,24 @@ BOOL WINAPI CPluginFSInterface::Delete(const char* fsName, int mode, HWND parent
     return success;
 }
 
+// Move cleanup after a download: delete exactly the downloaded objects, then the traversed folders
+// that are empty now. Returns the number of removed objects; failed deletions go to removeFailed.
+static int S3RemoveDownloaded(const S3TransferReport& report, int& removeFailed)
+{
+    int removed = 0;
+    for (const auto& done : report.DoneItems)
+    {
+        std::string delErr;
+        if (S3DeleteRecursive(done.c_str(), false, delErr)) removed++; else removeFailed++;
+    }
+    for (const auto& dir : report.DoneDirs)
+    {
+        std::string dErr;
+        S3DeleteFolderIfEmpty(dir.c_str(), dErr); // non-empty / failure: the folder simply stays
+    }
+    return removed;
+}
+
 BOOL WINAPI CPluginFSInterface::CopyOrMoveFromFS(BOOL copy, int mode, const char* fsName, HWND parent,
                                                 int panel, int selectedFiles, int selectedDirs,
                                                 char* targetPath, BOOL& operationMask,
@@ -923,20 +1080,45 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromFS(BOOL copy, int mode, const char
         S3Join(Path, f->Name, s3ItemPath, MAX_PATH);
 
         std::string err;
-        if (!S3DownloadRecursive(s3ItemPath, target, isDir != FALSE, err))
+        S3TransferReport report;
+        if (!S3DownloadRecursive(s3ItemPath, target, isDir != FALSE, err, &report, isDir ? -1 : (int64_t)f->Size.Value))
         {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "Error downloading \"%s\":\n%s\n\nContinue with other items?", f->Name, err.c_str());
-            if (SalamanderGeneral->SalMessageBox(parent, msg, LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO)
+            // Move: remove only what was fully downloaded; the failed items (and the folders
+            // that still contain them) stay on S3.
+            std::string moveNote;
+            if (!copy)
+            {
+                int removeFailed = 0;
+                int removed = S3RemoveDownloaded(report, removeFailed);
+                moveNote = "\n\nMove: " + std::to_string(removed) + " downloaded file(s) removed from S3";
+                if (removeFailed > 0) moveNote += ", " + std::to_string(removeFailed) + " could not be removed";
+                moveNote += "; the rest was left on S3.";
+            }
+            std::string failList;
+            for (size_t i = 0; i < report.FailedItems.size() && i < 5; i++)
+                failList += "\n" + report.FailedItems[i];
+            if (report.FailedItems.size() > 5)
+                failList += "\n... (" + std::to_string(report.FailedItems.size() - 5) + " more)";
+            std::string msg = std::string("Error downloading \"") + f->Name + "\":\n" + err + failList + moveNote;
+            msg += "\n\nContinue with other items?";
+            if (SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO || report.Canceled)
             {
                 success = FALSE;
                 cancelOrHandlePath = TRUE;
                 break;
             }
         }
-        else if (!copy)
+        else if (!copy && S3MayDeleteWholeSource(report))
         {
-            S3DeleteRecursive(s3ItemPath, isDir != FALSE, err);
+            // Delete exactly what was downloaded (not a fresh listing: objects created meanwhile stay).
+            int removeFailed = 0;
+            S3RemoveDownloaded(report, removeFailed);
+            if (removeFailed > 0)
+            {
+                std::string msg = std::string("Downloaded \"") + f->Name + "\" but " + std::to_string(removeFailed) +
+                                  " object(s) could not be removed from S3.";
+                SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            }
         }
 
         if (focused)
@@ -1010,11 +1192,25 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromDiskToFS(BOOL copy, int mode, cons
         SalamanderGeneral->SalPathAppend(local, name, 2 * MAX_PATH);
 
         std::string err;
-        if (!S3UploadRecursive(local, remoteDir, isDir != FALSE, err))
+        S3TransferReport report;
+        if (!S3UploadRecursive(local, remoteDir, isDir != FALSE, err, &report))
         {
-            char eb[700];
-            snprintf(eb, sizeof(eb), "Error uploading \"%s\":\n%s\n\nContinue with other items?", name, err.c_str());
-            if (SalamanderGeneral->SalMessageBox(parent, eb, LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO)
+            // Move: delete only the local files that were actually uploaded; failed files
+            // and the folders containing them stay on disk.
+            std::string moveNote;
+            if (!copy)
+            {
+                S3LocalFinishMove(report);
+                moveNote = "\n\nMove: only the successfully uploaded files (and folders left empty) were deleted locally.";
+            }
+            std::string failList;
+            for (size_t i = 0; i < report.FailedItems.size() && i < 5; i++)
+                failList += "\n" + report.FailedItems[i];
+            if (report.FailedItems.size() > 5)
+                failList += "\n... (" + std::to_string(report.FailedItems.size() - 5) + " more)";
+            std::string eb = std::string("Error uploading \"") + name + "\":\n" + err + failList + moveNote;
+            eb += "\n\nContinue with other items?";
+            if (SalamanderGeneral->SalMessageBox(parent, eb.c_str(), LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO || report.Canceled)
             {
                 success = FALSE;
                 if (invalidPathOrCancel != NULL)
@@ -1024,9 +1220,10 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromDiskToFS(BOOL copy, int mode, cons
             continue;
         }
 
-        if (!copy)
+        if (!copy && S3MayDeleteWholeSource(report))
         {
-            S3LocalDeleteRecursive(local, isDir != FALSE);
+            // Delete exactly what was uploaded; files created during the transfer stay.
+            S3LocalFinishMove(report);
         }
     }
 
