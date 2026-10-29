@@ -148,6 +148,20 @@ static void TestStreamingUpload()
     DeleteFileW(p.c_str());
 }
 
+static void TestRenameHelpers()
+{
+    std::string out;
+    CHECK(S3MapRenameKey("a/old/", "a/new/", "a/old/x/y.txt", out) && out == "a/new/x/y.txt");
+    CHECK(S3MapRenameKey("a/old/", "a/new/", "a/old/", out) && out == "a/new/");
+    CHECK(!S3MapRenameKey("a/old/", "a/new/", "a/other/x", out));
+    CHECK(!S3MapRenameKey("a/old/", "a/new/", "a/old", out)); // object named like the folder, not inside it
+    CHECK(!S3MapRenameKey("", "n/", "x", out));
+    CHECK(S3MayDeleteOldPrefix(3, 3, true));
+    CHECK(!S3MayDeleteOldPrefix(3, 2, true));   // one copy failed
+    CHECK(!S3MayDeleteOldPrefix(3, 3, false));  // listing failed
+    CHECK(S3MayDeleteOldPrefix(0, 0, true));
+}
+
 int main()
 {
     wchar_t tmp[MAX_PATH];
@@ -160,6 +174,7 @@ int main()
     TestWriteAll();
     TestMoveDecision();
     TestStreamingUpload();
+    TestRenameHelpers();
 
     RemoveDirectoryW(g_dir.c_str());
     printf("passed=%d failed=%d\n", g_pass, g_fail);

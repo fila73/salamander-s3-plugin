@@ -712,21 +712,39 @@ bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError)
         return S3Conn.DeleteBucket(bucket, outError);
     }
 
+    // A failed listing must not look like "folder is empty": stop and report it.
     std::vector<S3ObjectInfo> items;
-    if (S3Conn.ListDirectory(bucket, prefix, items, outError))
+    std::string listErr;
+    if (!S3Conn.ListDirectory(bucket, prefix, items, listErr))
     {
-        for (const auto& item : items)
+        outError = "Cannot list \"" + prefix + "\": " + listErr;
+        return false;
+    }
+
+    // Stop at the first failing child; the folder marker is removed only when all children are gone.
+    for (const auto& item : items)
+    {
+        char itemS3Path[MAX_PATH * 2];
+        snprintf(itemS3Path, sizeof(itemS3Path), "/%s/%s", bucket.c_str(), item.Key.c_str());
+        std::string childErr;
+        if (!S3DeleteRecursive(itemS3Path, item.IsDirectory, childErr))
         {
-            char itemS3Path[MAX_PATH * 2];
-            snprintf(itemS3Path, sizeof(itemS3Path), "/%s/%s", bucket.c_str(), item.Key.c_str());
-            S3DeleteRecursive(itemS3Path, item.IsDirectory, outError);
+            outError = "Cannot delete \"" + item.Key + "\": " + childErr;
+            return false;
         }
     }
 
+    // Only the folder marker ("prefix/") belongs to this folder. A plain object named "prefix"
+    // is a different object and must not be touched.
     std::string folderKey = prefix;
     if (folderKey.back() != '/') folderKey += "/";
-    S3Conn.DeleteObject(bucket, folderKey, outError);
-    return S3Conn.DeleteObject(bucket, prefix, outError);
+    std::string markerErr;
+    if (!S3Conn.DeleteObject(bucket, folderKey, markerErr))
+    {
+        outError = "Cannot delete folder marker \"" + folderKey + "\": " + markerErr;
+        return false;
+    }
+    return true;
 }
 
 void S3LocalDeleteRecursive(const char* localPath, bool isDir)

@@ -177,3 +177,24 @@ inline bool S3HashFileStream(HANDLE h, uint64_t size, char* buf, std::string& ou
     if (!sha.FinishHex(outHex)) { outError = "SHA-256 calculation failed."; return false; }
     return true;
 }
+
+// ---------------------------------------------------------------------------
+// Folder rename / recursive delete helpers
+// ---------------------------------------------------------------------------
+
+// Maps a key below oldPrefix to the same relative key below newPrefix.
+// Returns false if key is not inside oldPrefix (never guess with substr).
+inline bool S3MapRenameKey(const std::string& oldPrefix, const std::string& newPrefix,
+                           const std::string& key, std::string& outNewKey)
+{
+    if (oldPrefix.empty() || key.size() < oldPrefix.size() || key.compare(0, oldPrefix.size(), oldPrefix) != 0)
+        return false;
+    outNewKey = newPrefix + key.substr(oldPrefix.size());
+    return true;
+}
+
+// A folder rename may delete the old objects only when every copy succeeded.
+inline bool S3MayDeleteOldPrefix(size_t totalObjects, size_t copiedOk, bool listingOk)
+{
+    return listingOk && copiedOk == totalObjects;
+}

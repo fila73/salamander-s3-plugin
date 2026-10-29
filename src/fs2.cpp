@@ -673,7 +673,14 @@ BOOL WINAPI CPluginFSInterface::QuickRename(const char* fsName, int mode, HWND p
             return FALSE;
         }
 
-        S3Conn.DeleteObject(bucket, oldKey, err);
+        if (!S3Conn.DeleteObject(bucket, oldKey, err))
+        {
+            std::string msg = "The file was copied to the new name, but the old object \"" + oldKey +
+                              "\" could not be deleted:\n" + err;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
     }
     else
     {
@@ -689,22 +696,72 @@ BOOL WINAPI CPluginFSInterface::QuickRename(const char* fsName, int mode, HWND p
 
         std::vector<S3ObjectInfo> objects;
         std::string err;
-        if (S3Conn.ListRecursiveObjects(bucket, oldPrefix, objects, err))
+        if (!S3Conn.ListRecursiveObjects(bucket, oldPrefix, objects, err))
         {
-            for (const auto& obj : objects)
-            {
-                std::string rel = obj.Key.substr(oldPrefix.length());
-                std::string targetKey = newPrefix + rel;
-                std::string cErr;
-                if (S3Conn.CopyObject(bucket, obj.Key, bucket, targetKey, cErr))
-                {
-                    S3Conn.DeleteObject(bucket, obj.Key, cErr);
-                }
-            }
+            // Without a complete listing nothing is copied or deleted.
+            std::string msg = "Cannot list the folder, nothing was renamed:\n" + err;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            return FALSE;
         }
 
-        S3Conn.CreateFolder(bucket, newPrefix, err);
-        S3Conn.DeleteObject(bucket, oldPrefix, err);
+        // Phase 1: copy everything; stop at the first failure and keep the old prefix untouched.
+        size_t copiedOk = 0;
+        std::string failMsg;
+        for (const auto& obj : objects)
+        {
+            std::string targetKey;
+            std::string cErr;
+            if (!S3MapRenameKey(oldPrefix, newPrefix, obj.Key, targetKey))
+            {
+                failMsg = "Unexpected key \"" + obj.Key + "\" in listing.";
+                break;
+            }
+            if (!S3Conn.CopyObject(bucket, obj.Key, bucket, targetKey, cErr))
+            {
+                failMsg = "Copy of \"" + obj.Key + "\" failed: " + cErr;
+                break;
+            }
+            copiedOk++;
+        }
+        if (failMsg.empty() && !S3Conn.CreateFolder(bucket, newPrefix, err))
+            failMsg = "Cannot create the new folder: " + err;
+
+        if (!failMsg.empty() || !S3MayDeleteOldPrefix(objects.size(), copiedOk, true))
+        {
+            std::string msg = failMsg + "\n\nThe old folder was NOT deleted (" + std::to_string(copiedOk) + " of " +
+                              std::to_string(objects.size()) + " objects were already copied to the new name).";
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
+
+        // Phase 2: every copy succeeded, now remove the old objects; report failures.
+        std::string delFail;
+        size_t delFailCount = 0;
+        for (const auto& obj : objects)
+        {
+            std::string dErr;
+            if (obj.Key == oldPrefix)
+                continue; // the old folder marker is deleted below
+            if (!S3Conn.DeleteObject(bucket, obj.Key, dErr))
+            {
+                if (delFailCount++ < 3) delFail += "\n\"" + obj.Key + "\": " + dErr;
+            }
+        }
+        std::string mErr;
+        if (delFailCount == 0 && !S3Conn.DeleteObject(bucket, oldPrefix, mErr))
+        {
+            delFail += "\n\"" + oldPrefix + "\": " + mErr;
+            delFailCount++;
+        }
+        if (delFailCount > 0)
+        {
+            std::string msg = "The folder was copied to the new name, but " + std::to_string(delFailCount) +
+                              " old object(s) could not be deleted:" + delFail;
+            SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_TITLE_RENAME_ERR), MB_OK | MB_ICONERROR);
+            SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
+            return FALSE;
+        }
     }
 
     SalamanderGeneral->PostRefreshPanelFS(this, FALSE);
