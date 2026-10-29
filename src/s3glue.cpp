@@ -469,7 +469,7 @@ static bool S3InternalProgress(uint64_t currentBytes, uint64_t totalBytes, void*
     return true;
 }
 
-bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::string& outError)
+bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::string& outError, int64_t expectedSize)
 {
     std::string bucket, prefix;
     if (!S3ParsePath(s3Path, bucket, prefix) || bucket.empty())
@@ -482,7 +482,7 @@ bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::st
     const char* fileName2 = strrchr(localFilePath, '/');
     if (fileName2 && (!fileName || fileName2 > fileName)) fileName = fileName2;
     fileName = fileName ? fileName + 1 : localFilePath;
-    return S3Conn.DownloadFile(bucket, prefix, localW.c_str(), 0, S3InternalProgress, (void*)fileName, outError);
+    return S3Conn.DownloadFile(bucket, prefix, localW.c_str(), 0, S3InternalProgress, (void*)fileName, outError, expectedSize);
 }
 
 bool S3UploadSingleFile(const char* localFilePath, const char* s3Path, std::string& outError)
@@ -512,8 +512,68 @@ static bool S3IsCancelError(const std::string& err)
     return err.find("canceled") != std::string::npos;
 }
 
+// Per-operation state of downloads: local files written so far (case-insensitive) and the
+// remembered "overwrite all" / "skip all" answer.
+static S3WrittenSet g_S3Written;
+static HWND g_S3OpParent = NULL;
+static int g_S3OverwriteAnswer = 0; // 0 = ask, IDYES = overwrite all, IDNO = skip all
+
+void S3TransferOpReset(HWND parent)
+{
+    g_S3Written.Clear();
+    g_S3OpParent = parent;
+    g_S3OverwriteAnswer = 0;
+}
+
+// Decides whether localFile may be written. Fails the item on a case-insensitive name clash with a
+// file written earlier in this operation, or when the user declines to overwrite an existing file.
+static bool S3ClaimDownloadTarget(const char* localFile, std::string& outError)
+{
+    std::wstring w = AnsiToWide(localFile);
+    if (!g_S3Written.Claim(w))
+    {
+        outError = std::string("Name clash: \"") + localFile + "\" differs only by letter case from a file already "
+                   "written by this operation. The object was not downloaded and stays on S3.";
+        return false;
+    }
+    if (GetFileAttributesA(localFile) == INVALID_FILE_ATTRIBUTES)
+        return true;
+    if (g_S3OverwriteAnswer == 0)
+    {
+        std::string msg = std::string("The file already exists:\n") + localFile +
+                          "\n\nYes = overwrite (and overwrite all following)\nNo = skip (and skip all following)\nCancel = stop";
+        int a = SalamanderGeneral->SalMessageBox(g_S3OpParent, msg.c_str(), LoadStr(IDS_PLUGINNAME),
+                                                 MB_YESNOCANCEL | MB_ICONQUESTION);
+        if (a == IDCANCEL)
+        {
+            outError = "Download canceled by user.";
+            return false;
+        }
+        g_S3OverwriteAnswer = (a == IDYES) ? IDYES : IDNO;
+    }
+    if (g_S3OverwriteAnswer == IDYES)
+        return true;
+    outError = "Skipped, the file already exists locally.";
+    return false;
+}
+
+static bool S3DownloadOneFile(const std::string& s3Path, const char* localFile, int64_t expectedSize,
+                              std::string& outError, S3TransferReport* report)
+{
+    bool ok = S3ClaimDownloadTarget(localFile, outError) &&
+              S3DownloadSingleFile(s3Path.c_str(), localFile, outError, expectedSize);
+    if (ok)
+    {
+        if (report) report->DoneItems.push_back(s3Path);
+        return true;
+    }
+    if (S3IsCancelError(outError) && report) report->Canceled = true;
+    S3ReportFail(report, s3Path, outError);
+    return false;
+}
+
 bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError,
-                         S3TransferReport* report)
+                         S3TransferReport* report, int64_t expectedSize)
 {
     if (!isDir)
     {
@@ -526,14 +586,7 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         }
         char localTargetFile[MAX_PATH * 2];
         snprintf(localTargetFile, sizeof(localTargetFile), "%s\\%s", localTargetDir, name);
-        if (S3DownloadSingleFile(s3Path, localTargetFile, outError))
-        {
-            if (report) report->DoneItems.push_back(s3Path);
-            return true;
-        }
-        if (S3IsCancelError(outError) && report) report->Canceled = true;
-        S3ReportFail(report, s3Path, outError);
-        return false;
+        return S3DownloadOneFile(s3Path, localTargetFile, expectedSize, outError, report);
     }
 
     std::string bucket, prefix;
@@ -589,16 +642,7 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         {
             char targetLocalFile[MAX_PATH * 2];
             snprintf(targetLocalFile, sizeof(targetLocalFile), "%s\\%s", subLocalDir, item.DisplayName.c_str());
-            ok = S3DownloadSingleFile(itemS3Path, targetLocalFile, childErr);
-            if (ok)
-            {
-                if (report) report->DoneItems.push_back(itemS3Path);
-            }
-            else
-            {
-                if (S3IsCancelError(childErr) && report) report->Canceled = true;
-                S3ReportFail(report, itemS3Path, childErr);
-            }
+            ok = S3DownloadOneFile(itemS3Path, targetLocalFile, (int64_t)item.Size, childErr, report);
         }
         if (!ok)
         {
@@ -609,6 +653,9 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         }
     }
 
+    // Folder traversed (children first): on Move the folder is removed only if it is empty by then.
+    if (report) report->DoneDirs.push_back(s3Path);
+
     if (!allOk)
     {
         outError = firstError;
@@ -617,8 +664,17 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
     return true;
 }
 
+static bool S3UploadRecursiveImpl(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError,
+                                  S3TransferReport* report, int depth);
+
 bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError,
                        S3TransferReport* report)
+{
+    return S3UploadRecursiveImpl(localPath, s3TargetDir, isDir, outError, report, 0);
+}
+
+static bool S3UploadRecursiveImpl(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError,
+                                  S3TransferReport* report, int depth)
 {
     const char* bs = strrchr(localPath, '\\');
     const char* slash = strrchr(localPath, '/');
@@ -640,6 +696,21 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
             if (S3IsCancelError(outError)) report->Canceled = true;
             report->FailedItems.push_back(std::string(localPath) + ": " + outError);
         }
+        return false;
+    }
+
+    // Junctions / directory symlinks are leaves: never followed, never reported as transferred,
+    // so they (and every parent folder) stay on disk after a Move.
+    if (S3IsReparseAttr(GetFileAttributesA(localPath)))
+    {
+        outError = "Skipped, folder is a junction or symbolic link (not followed).";
+        S3ReportFail(report, localPath, outError);
+        return false;
+    }
+    if (depth >= S3_MAX_RECURSION_DEPTH)
+    {
+        outError = "Skipped, folders are nested deeper than 64 levels.";
+        S3ReportFail(report, localPath, outError);
         return false;
     }
 
@@ -691,7 +762,7 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
         bool subIsDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
         std::string childErr;
-        if (!S3UploadRecursive(subLocal, remoteDest, subIsDir, childErr, report))
+        if (!S3UploadRecursiveImpl(subLocal, remoteDest, subIsDir, childErr, report, depth + 1))
         {
             allOk = false;
             if (firstError.empty()) firstError = childErr;
@@ -700,12 +771,37 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
     } while (FindNextFileA(hFind, &fd));
 
     FindClose(hFind);
+    if (report) report->DoneDirs.push_back(localPath);
     if (!allOk)
     {
         outError = firstError;
         return false;
     }
     return true;
+}
+
+// Deletes the S3 folder (marker, or the bucket for a bucket root) only if nothing is left in it.
+bool S3DeleteFolderIfEmpty(const char* s3Path, std::string& outError)
+{
+    std::string bucket, prefix;
+    if (!S3ParsePath(s3Path, bucket, prefix) || bucket.empty())
+    {
+        outError = "Invalid folder path.";
+        return false;
+    }
+    std::vector<S3ObjectInfo> items;
+    if (!S3Conn.ListDirectory(bucket, prefix, items, outError))
+        return false;
+    if (!items.empty())
+    {
+        outError = "Folder is not empty.";
+        return false;
+    }
+    if (prefix.empty())
+        return S3Conn.DeleteBucket(bucket, outError);
+    std::string folderKey = prefix;
+    if (folderKey.back() != '/') folderKey += "/";
+    return S3Conn.DeleteObject(bucket, folderKey, outError);
 }
 
 bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError)
@@ -764,31 +860,5 @@ bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError)
 
 void S3LocalDeleteRecursive(const char* localPath, bool isDir)
 {
-    if (!isDir)
-    {
-        SetFileAttributesA(localPath, FILE_ATTRIBUTE_NORMAL);
-        DeleteFileA(localPath);
-        return;
-    }
-
-    char searchPattern[MAX_PATH * 2];
-    snprintf(searchPattern, sizeof(searchPattern), "%s\\*.*", localPath);
-
-    WIN32_FIND_DATAA fd;
-    HANDLE hFind = FindFirstFileA(searchPattern, &fd);
-    if (hFind != INVALID_HANDLE_VALUE)
-    {
-        do
-        {
-            if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
-
-            char subLocal[MAX_PATH * 2];
-            snprintf(subLocal, sizeof(subLocal), "%s\\%s", localPath, fd.cFileName);
-            bool subIsDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
-            S3LocalDeleteRecursive(subLocal, subIsDir);
-        } while (FindNextFileA(hFind, &fd));
-        FindClose(hFind);
-    }
-
-    RemoveDirectoryA(localPath);
+    S3LocalDeleteTree(localPath, isDir);
 }

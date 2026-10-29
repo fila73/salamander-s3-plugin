@@ -118,7 +118,8 @@ public:
         uint64_t resumeOffset,
         S3ProgressCallback progressCb,
         void* userData,
-        std::string& outError
+        std::string& outError,
+        int64_t expectedSize = -1 // size from the listing, -1 = unknown
     );
 
     bool UploadFile(

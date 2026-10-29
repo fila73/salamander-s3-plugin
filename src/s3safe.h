@@ -21,6 +21,21 @@ inline bool S3ReceivedSizeOk(uint64_t received, bool hasExpected, uint64_t expec
     return !hasExpected || received == expected;
 }
 
+// Combines the Content-Length header (if any) with the size known from the listing
+// (listedSize < 0 = unknown). Outputs the size to verify against; false if both are
+// known and disagree (object changed since it was listed).
+inline bool S3ResolveExpectedSize(bool hasHeader, uint64_t header, int64_t listedSize,
+                                  bool& outHas, uint64_t& outExpected)
+{
+    outHas = false;
+    outExpected = 0;
+    if (hasHeader && listedSize >= 0 && header != (uint64_t)listedSize)
+        return false;
+    if (hasHeader) { outHas = true; outExpected = header; }
+    else if (listedSize >= 0) { outHas = true; outExpected = (uint64_t)listedSize; }
+    return true;
+}
+
 // Builds a unique temp file path next to the target (same directory => same volume,
 // so the final MoveFileExW is a rename, not a copy).
 inline std::wstring S3MakeTempPath(const std::wstring& target, unsigned attempt)
@@ -62,6 +77,7 @@ inline bool S3WriteAll(HANDLE h, const void* data, DWORD size)
 struct S3TransferReport
 {
     std::vector<std::string> DoneItems;   // items fully transferred (files only)
+    std::vector<std::string> DoneDirs;    // folders traversed, children before parents (removed on Move only if empty)
     std::vector<std::string> FailedItems; // items that failed (with reason appended)
     bool Canceled = false;
 
@@ -226,14 +242,29 @@ inline bool S3IsSafeLocalComponent(const std::string& name, const std::string& k
     char last = name.back();
     if (last == '.' || last == ' ') return fail("name ends with a dot or space");
 
-    // reserved device names, with or without extension: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+    // names longer than 255 UTF-16 units cannot be created
+    {
+        int wl = MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name.c_str(), (int)name.size(), NULL, 0);
+        size_t units = wl > 0 ? (size_t)wl : name.size();
+        if (units > 255) return fail("name is longer than 255 characters");
+    }
+
+    // reserved device names, with or without extension: CON, PRN, AUX, NUL, CONIN$, CONOUT$, CLOCK$,
+    // COM0-9, LPT0-9 (also with superscript digits 1-3)
     std::string stem = name.substr(0, name.find('.'));
     while (!stem.empty() && stem.back() == ' ') stem.pop_back();
     std::string up;
     for (unsigned char c : stem) up += (char)std::toupper(c);
-    bool reserved = (up == "CON" || up == "PRN" || up == "AUX" || up == "NUL");
-    if (up.size() == 4 && (up.compare(0, 3, "COM") == 0 || up.compare(0, 3, "LPT") == 0) && up[3] >= '1' && up[3] <= '9')
-        reserved = true;
+    bool reserved = (up == "CON" || up == "PRN" || up == "AUX" || up == "NUL" ||
+                     up == "CONIN$" || up == "CONOUT$" || up == "CLOCK$");
+    if (up.size() >= 4 && (up.compare(0, 3, "COM") == 0 || up.compare(0, 3, "LPT") == 0))
+    {
+        std::string d = up.substr(3);
+        if (d.size() == 1 && d[0] >= '0' && d[0] <= '9') reserved = true;
+        if (d == "\xC2\xB9" || d == "\xC2\xB2" || d == "\xC2\xB3") reserved = true; // UTF-8 superscript 1,2,3
+        if (d.size() == 1 && ((unsigned char)d[0] == 0xB9 || (unsigned char)d[0] == 0xB2 || (unsigned char)d[0] == 0xB3))
+            reserved = true; // ANSI (cp1252) superscript 1,2,3
+    }
     if (reserved) return fail("reserved device name");
     return true;
 }
@@ -245,4 +276,103 @@ inline std::string S3LastComponent(const std::string& path)
     while (!p.empty() && p.back() == '/') p.pop_back();
     size_t s = p.rfind('/');
     return s == std::string::npos ? p : p.substr(s + 1);
+}
+
+// ---------------------------------------------------------------------------
+// Local collision / reparse point / Move-cleanup helpers
+// ---------------------------------------------------------------------------
+
+#include <set>
+#pragma comment(lib, "user32.lib")
+
+static const int S3_MAX_RECURSION_DEPTH = 64;
+
+inline bool S3IsReparseAttr(DWORD attr)
+{
+    return attr != INVALID_FILE_ATTRIBUTES && (attr & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+}
+
+// Case-insensitive form of a local path (NTFS is case-insensitive).
+inline std::wstring S3FoldPath(const std::wstring& path)
+{
+    std::wstring r = path;
+    if (!r.empty()) CharUpperBuffW(&r[0], (DWORD)r.size());
+    for (auto& c : r) if (c == L'/') c = L'\\';
+    return r;
+}
+
+// Set of local files written by one operation. Claim() fails if a name that differs only
+// by case (or is identical) was already claimed: the second item must not overwrite the first.
+class S3WrittenSet
+{
+public:
+    bool Claim(const std::wstring& path) { return m_set.insert(S3FoldPath(path)).second; }
+    void Clear() { m_set.clear(); }
+private:
+    std::set<std::wstring> m_set;
+};
+
+// Deletes a local tree for a completed Move. Never follows reparse points (junctions, dir symlinks):
+// a reparse-point folder is only removed (link itself) when it is the root item, nested ones are kept.
+// Returns true if path is gone afterwards.
+inline bool S3LocalDeleteTree(const std::string& path, bool isDir, int depth = 0)
+{
+    if (!isDir)
+    {
+        SetFileAttributesA(path.c_str(), FILE_ATTRIBUTE_NORMAL);
+        return DeleteFileA(path.c_str()) != 0;
+    }
+    DWORD attr = GetFileAttributesA(path.c_str());
+    if (S3IsReparseAttr(attr))
+        return depth == 0 && RemoveDirectoryA(path.c_str()) != 0; // only the link, never the target
+    if (depth >= S3_MAX_RECURSION_DEPTH)
+        return false;
+
+    WIN32_FIND_DATAA fd;
+    HANDLE h = FindFirstFileA((path + "\\*.*").c_str(), &fd);
+    if (h != INVALID_HANDLE_VALUE)
+    {
+        do
+        {
+            if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
+            bool sub = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
+            if (sub && S3IsReparseAttr(fd.dwFileAttributes)) continue; // keep nested links
+            S3LocalDeleteTree(path + "\\" + fd.cFileName, sub, depth + 1);
+        } while (FindNextFileA(h, &fd));
+        FindClose(h);
+    }
+    return RemoveDirectoryA(path.c_str()) != 0;
+}
+
+// Move cleanup after an upload: delete exactly the files that were uploaded, then the folders
+// that were traversed - but only those that are empty now (RemoveDirectory fails otherwise).
+// Anything created during the transfer, and anything not transferred, stays.
+inline void S3LocalFinishMove(const S3TransferReport& r)
+{
+    for (const auto& f : r.DoneItems)
+        S3LocalDeleteTree(f, false);
+    for (const auto& d : r.DoneDirs)
+        RemoveDirectoryA(d.c_str());
+}
+
+// A server-side copy succeeded only with HTTP 200 and a <CopyObjectResult> body. S3 may answer 200
+// with an <Error> body when the copy fails mid-way; status 0 means the status could not be read.
+inline bool S3CopyResultOk(unsigned long status, const std::string& body, std::string& outError)
+{
+    if (status != 200)
+    {
+        outError = "Copy failed: unexpected HTTP status " + std::to_string(status) + ".";
+        return false;
+    }
+    if (body.find("<Error>") != std::string::npos || body.find("<Error ") != std::string::npos)
+    {
+        outError = "Copy failed: server returned an error in the response body.";
+        return false;
+    }
+    if (body.find("<CopyObjectResult") == std::string::npos)
+    {
+        outError = "Copy not confirmed: response has no <CopyObjectResult>.";
+        return false;
+    }
+    return true;
 }

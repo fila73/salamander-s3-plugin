@@ -583,7 +583,8 @@ bool CS3Connection::DownloadFile(
     uint64_t resumeOffset,
     S3ProgressCallback progressCb,
     void* userData,
-    std::string& outError
+    std::string& outError,
+    int64_t expectedSize
 )
 {
     if (resumeOffset > 0)
@@ -661,15 +662,26 @@ bool CS3Connection::DownloadFile(
     DWORD clBufSize = sizeof(clBuf);
     uint64_t totalBytes = 0;
     bool hasExpected = false;
+    bool hasHeader = false;
+    uint64_t headerBytes = 0;
     if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, clBuf, &clBufSize, WINHTTP_NO_HEADER_INDEX))
     {
         wchar_t* endp = NULL;
         unsigned long long v = _wcstoui64(clBuf, &endp, 10);
         if (endp != clBuf)
         {
-            totalBytes = v;
-            hasExpected = true;
+            headerBytes = v;
+            hasHeader = true;
         }
+    }
+    // Without a Content-Length the size from the listing is the only way to detect truncation.
+    if (!S3ResolveExpectedSize(hasHeader, headerBytes, expectedSize, hasExpected, totalBytes))
+    {
+        outError = "Object size differs from the listing (" + std::to_string(headerBytes) + " vs " +
+                   std::to_string(expectedSize) + " bytes); the object changed, download refused.";
+        WinHttpCloseHandle(hRequest);
+        WinHttpCloseHandle(hConnect);
+        return false;
     }
 
     // Download into a temp file next to the target; the target is replaced only after
@@ -1049,7 +1061,9 @@ bool CS3Connection::CopyObject(const std::string& srcBucket, const std::string& 
     std::map<std::string, std::string> extraHeaders;
     extraHeaders["x-amz-copy-source"] = S3Auth::UriEncode("/" + srcBucket + "/" + srcKey, false);
 
-    return SendS3Request("PUT", dstBucket, dstKey, {}, extraHeaders, nullptr, 0, body, respHeaders, statusCode, outError);
+    if (!SendS3Request("PUT", dstBucket, dstKey, {}, extraHeaders, nullptr, 0, body, respHeaders, statusCode, outError))
+        return false;
+    return S3CopyResultOk(statusCode, body, outError);
 }
 
 bool CS3Connection::StatObject(const std::string& bucket, const std::string& key, S3ObjectInfo& outInfo, std::string& outError)

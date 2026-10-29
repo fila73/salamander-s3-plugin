@@ -1,6 +1,7 @@
 // Standalone tests for src\s3safe.h (data-safety helpers). No network, uses a temp dir.
 #include "../src/s3safe.h"
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <vector>
 
@@ -198,6 +199,136 @@ static void TestSafeNames()
     CHECK(S3LastComponent("x") == "x");
 }
 
+
+static void TestExpectedSize()
+{
+    bool has; uint64_t exp;
+    CHECK(S3ResolveExpectedSize(true, 10, -1, has, exp) && has && exp == 10);
+    CHECK(S3ResolveExpectedSize(false, 0, 7, has, exp) && has && exp == 7);   // no header: listing size is used
+    CHECK(S3ResolveExpectedSize(false, 0, -1, has, exp) && !has);
+    CHECK(!S3ResolveExpectedSize(true, 10, 11, has, exp));                     // header vs listing mismatch
+    CHECK(S3ResolveExpectedSize(true, 0, 0, has, exp) && has && exp == 0);
+}
+
+static void TestCopyResult()
+{
+    std::string e;
+    CHECK(S3CopyResultOk(200, "<CopyObjectResult><ETag>x</ETag></CopyObjectResult>", e));
+    CHECK(!S3CopyResultOk(0, "<CopyObjectResult/>", e));          // status unreadable
+    CHECK(!S3CopyResultOk(204, "", e));
+    CHECK(!S3CopyResultOk(200, "", e));                           // no body: not confirmed
+    CHECK(!S3CopyResultOk(200, "<Error><Code>InternalError</Code></Error>", e));
+    CHECK(!S3CopyResultOk(200, "<CopyObjectResult/><Error>x</Error>", e));
+}
+
+static void TestReservedNamesMore()
+{
+    std::string r;
+    CHECK(!S3IsSafeLocalComponent("CONIN$", "k", r));
+    CHECK(!S3IsSafeLocalComponent("conout$.txt", "k", r));
+    CHECK(!S3IsSafeLocalComponent("CLOCK$", "k", r));
+    CHECK(!S3IsSafeLocalComponent("COM0", "k", r));
+    CHECK(!S3IsSafeLocalComponent("lpt0.txt", "k", r));
+    CHECK(!S3IsSafeLocalComponent("COM\xC2\xB9", "k", r));       // COM + superscript one (UTF-8)
+    CHECK(!S3IsSafeLocalComponent("LPT\xC2\xB3.log", "k", r));
+    CHECK(!S3IsSafeLocalComponent("COM\xB2", "k", r));           // cp1252 form
+    CHECK(S3IsSafeLocalComponent("COM10", "k", r));
+    CHECK(S3IsSafeLocalComponent("CONSOLE", "k", r));
+    CHECK(S3IsSafeLocalComponent(std::string(255, 'a'), "k", r));
+    CHECK(!S3IsSafeLocalComponent(std::string(256, 'a'), "k", r));
+}
+
+static void TestWrittenSet()
+{
+    S3WrittenSet w;
+    CHECK(w.Claim(L"C:\\t\\Report.txt"));
+    CHECK(!w.Claim(L"C:\\t\\report.txt"));   // case-insensitive clash
+    CHECK(!w.Claim(L"c:/t/REPORT.TXT"));
+    CHECK(w.Claim(L"C:\\t\\other.txt"));
+    w.Clear();
+    CHECK(w.Claim(L"C:\\t\\report.txt"));
+}
+
+static std::string Narrow(const std::wstring& w)
+{
+    char b[1024];
+    int n = WideCharToMultiByte(CP_ACP, 0, w.c_str(), (int)w.size(), b, sizeof b, NULL, NULL);
+    return std::string(b, n > 0 ? n : 0);
+}
+
+static bool Junction(const std::wstring& link, const std::wstring& target)
+{
+    std::wstring cmd = L"cmd /c mklink /J \"" + link + L"\" \"" + target + L"\" >nul";
+    return _wsystem(cmd.c_str()) == 0;
+}
+
+static void TestJunctionAndFinishMove()
+{
+    std::wstring root = g_dir + L"\\mv";
+    std::wstring victim = g_dir + L"\\victim";
+    CreateDirectoryW(root.c_str(), NULL);
+    CreateDirectoryW(victim.c_str(), NULL);
+    WriteTxt(victim + L"\\precious.txt", "keep me");
+    WriteTxt(root + L"\\a.txt", "a");
+    WriteTxt(root + L"\\late.txt", "created during transfer");
+    std::wstring link = root + L"\\link";
+    bool haveJ = Junction(link, victim);
+
+    std::string rootA = Narrow(root);
+    if (haveJ)
+    {
+        CHECK(S3IsReparseAttr(GetFileAttributesW(link.c_str())));
+        // nested junction is never followed
+        S3LocalDeleteTree(rootA, true);
+        CHECK(Exists(victim + L"\\precious.txt"));        // junction target untouched
+        CHECK(Exists(link));                              // nested link kept
+        CHECK(!Exists(root + L"\\a.txt"));
+        // root item that is itself a junction: only the link goes away
+        CHECK(S3LocalDeleteTree(Narrow(link), true));
+        CHECK(!Exists(link));
+        CHECK(Exists(victim + L"\\precious.txt"));
+    }
+    else
+        printf("SKIP junction scenario (mklink /J unavailable)\n");
+
+    // Move finish: only reported files + empty folders are removed
+    CreateDirectoryW(root.c_str(), NULL);
+    CreateDirectoryW((root + L"\\sub").c_str(), NULL);
+    CreateDirectoryW((root + L"\\sub2").c_str(), NULL);
+    WriteTxt(root + L"\\a.txt", "a");
+    WriteTxt(root + L"\\late.txt", "late");
+    WriteTxt(root + L"\\sub\\b.txt", "b");
+    WriteTxt(root + L"\\sub2\\new.txt", "new");
+    S3TransferReport rep;
+    rep.DoneItems.push_back(rootA + "\\a.txt");
+    rep.DoneItems.push_back(rootA + "\\sub\\b.txt");
+    rep.DoneDirs.push_back(rootA + "\\sub");
+    rep.DoneDirs.push_back(rootA + "\\sub2");
+    rep.DoneDirs.push_back(rootA);
+    S3LocalFinishMove(rep);
+    CHECK(!Exists(root + L"\\a.txt"));
+    CHECK(!Exists(root + L"\\sub"));                      // emptied -> removed
+    CHECK(Exists(root + L"\\late.txt"));                  // created meanwhile -> stays
+    CHECK(Exists(root + L"\\sub2\\new.txt"));
+    CHECK(Exists(root));
+    S3LocalDeleteTree(rootA, true);
+    DeleteFileW((victim + L"\\precious.txt").c_str());
+    RemoveDirectoryW(victim.c_str());
+}
+
+static void TestDeleteDepthLimit()
+{
+    std::string base = Narrow(g_dir);
+    base += "\\deep";
+    CreateDirectoryA(base.c_str(), NULL);
+    std::string cur = base;
+    for (int i = 0; i < 70; i++) { cur += "\\d"; CreateDirectoryA(cur.c_str(), NULL); }
+    CHECK(!S3LocalDeleteTree(base, true));                // exceeds 64 levels: gives up, no crash
+    // cleanup from the bottom
+    while (cur.size() > base.size()) { RemoveDirectoryA(cur.c_str()); cur.resize(cur.size() - 2); }
+    RemoveDirectoryA(base.c_str());
+}
+
 int main()
 {
     wchar_t tmp[MAX_PATH];
@@ -212,6 +343,12 @@ int main()
     TestStreamingUpload();
     TestRenameHelpers();
     TestSafeNames();
+    TestExpectedSize();
+    TestCopyResult();
+    TestReservedNamesMore();
+    TestWrittenSet();
+    TestJunctionAndFinishMove();
+    TestDeleteDepthLimit();
 
     RemoveDirectoryW(g_dir.c_str());
     printf("passed=%d failed=%d\n", g_pass, g_fail);

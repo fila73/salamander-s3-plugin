@@ -134,14 +134,31 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
                                              LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
             return;
         }
-        char tmpDir[MAX_PATH], tmpFile[MAX_PATH];
-        GetTempPathA(MAX_PATH, tmpDir);
+        // Fresh, unique temp folder: never overwrite an existing file in %TEMP%.
+        char tmpBase[MAX_PATH], tmpDir[MAX_PATH], tmpFile[MAX_PATH];
+        if (GetTempPathA(MAX_PATH, tmpBase) == 0 || GetTempPathA(MAX_PATH, tmpBase) >= MAX_PATH)
+            return;
+        bool haveDir = false;
+        for (int attempt = 0; attempt < 100 && !haveDir; attempt++)
+        {
+            char sub[64];
+            snprintf(sub, sizeof(sub), "s3plugin_%lu_%lu_%d", GetCurrentProcessId(), GetTickCount(), attempt);
+            lstrcpynA(tmpDir, tmpBase, MAX_PATH);
+            if (!SalamanderGeneral->SalPathAppend(tmpDir, sub, MAX_PATH))
+                break;
+            haveDir = CreateDirectoryA(tmpDir, NULL) != 0; // fails if it already exists
+        }
         lstrcpynA(tmpFile, tmpDir, MAX_PATH);
-        SalamanderGeneral->SalPathAppend(tmpFile, file.Name, MAX_PATH);
+        if (!haveDir || !SalamanderGeneral->SalPathAppend(tmpFile, file.Name, MAX_PATH))
+        {
+            SalamanderGeneral->SalMessageBox(SalamanderGeneral->GetMsgBoxParent(), "Cannot create a temporary file for the download.",
+                                             LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
         HWND parent = SalamanderGeneral->GetMsgBoxParent();
         std::string err;
         S3ProgressBegin(parent);
-        if (S3EnsureConnected(parent) && S3DownloadSingleFile(remote, tmpFile, err))
+        if (S3EnsureConnected(parent) && S3DownloadSingleFile(remote, tmpFile, err, (int64_t)file.Size.Value))
         {
             S3ProgressEnd();
             ShellExecuteA(SalamanderGeneral->GetMainWindowHWND(), "open", tmpFile, NULL, tmpDir, SW_SHOWNORMAL);
