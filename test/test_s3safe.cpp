@@ -290,6 +290,9 @@ static void TestDownloadableKey()
     CHECK(!S3IsDownloadableKey("/x"));
     CHECK(!S3IsDownloadableKey("a//x"));
     CHECK(!S3IsDownloadableKey("a//"));
+    CHECK(!S3IsDownloadableKey("a/\\/"));
+    CHECK(!S3IsDownloadableKey("a/x\\y/"));
+    CHECK(!S3IsDownloadableKey("\\/"));
 }
 
 static void TestJunctionAndFinishMove()

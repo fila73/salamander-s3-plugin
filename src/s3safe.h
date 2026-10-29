@@ -270,10 +270,12 @@ inline bool S3IsSafeLocalComponent(const std::string& name, const std::string& k
 }
 
 // A key that can be addressed after S3Normalize (which collapses "//"): non-empty, no leading '/',
-// no empty component. Others cannot be downloaded safely (a CommonPrefix like "a//" would re-list itself).
+// no empty component, no '\' (S3Normalize turns it into '/'). Others cannot be downloaded safely
+// (a CommonPrefix like "a//" or "a/\/" would re-list itself, "a/x\y/" would address "a/x/y/").
 inline bool S3IsDownloadableKey(const std::string& key)
 {
     if (key.empty() || key[0] == '/') return false;
+    if (key.find('\\') != std::string::npos) return false;
     return key.find("//") == std::string::npos;
 }
 
