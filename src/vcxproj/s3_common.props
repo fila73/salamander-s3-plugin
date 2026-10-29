@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Shared settings for s3.vcxproj and the lang_*.vcxproj projects.
+     Workspace layout: the plugin SDK is taken from the samandarin fork,
+     salamander\samandarin\src (so $(SalamanderSdkDir)plugins\shared is the SDK). Override with
+     /p:SalamanderSdkDir=<path to a dir containing plugins\shared> if it lives elsewhere. -->
+<Project xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup Label="UserMacros">
+    <S3RootDir>$([System.IO.Path]::GetFullPath('$(MSBuildThisFileDirectory)..\..\'))</S3RootDir>
+    <S3SrcDir>$(S3RootDir)src\</S3SrcDir>
+    <SalamanderSdkDir Condition="'$(SalamanderSdkDir)'==''">$([System.IO.Path]::GetFullPath('$(S3RootDir)..\..\samandarin\src'))</SalamanderSdkDir>
+    <SalamanderSdkDir Condition="!HasTrailingSlash('$(SalamanderSdkDir)')">$(SalamanderSdkDir)\</SalamanderSdkDir>
+    <SalamanderSharedDir>$(SalamanderSdkDir)plugins\shared\</SalamanderSharedDir>
+    <S3OutDir>$(S3RootDir)build\$(Configuration)_$(Platform)\</S3OutDir>
+  </PropertyGroup>
+  <PropertyGroup>
+    <GenerateManifest>false</GenerateManifest>
+    <EmbedManifest>false</EmbedManifest>
+  </PropertyGroup>
+  <Target Name="S3CheckSdk" BeforeTargets="PrepareForBuild">
+    <Error Condition="!Exists('$(SalamanderSharedDir)spl_base.h')"
+           Text="Open Salamander SDK not found in '$(SalamanderSdkDir)'. Pass /p:SalamanderSdkDir=&lt;path to samandarin\src&gt;." />
+  </Target>
+</Project>

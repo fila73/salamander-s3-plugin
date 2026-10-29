@@ -1,0 +1,12 @@
+*.res
+*.o
+*.obj
+*.spl
+*.slg
+salamander-s3-plugin.ena
+build/
+*.obj
+*.pdb
+.vs/
+.idea/
+*.user

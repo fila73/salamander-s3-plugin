@@ -53,7 +53,6 @@ Samostatný souborový plugin (FS) pro [Open Salamander 5.0](https://github.com/
 | `src/s3glue.h/.cpp` | Lepidlo propojující rozhraní Salamandera s `CS3Connection`. |
 | `src/fs1.cpp` | Přihlašovací dialog (`ConnectDlgProc`), správa profilů a zadávání klíčů. |
 | `src/fs2.cpp` | Implementace souborových operací (ChangePath, ListCurrentPath, Copy, Delete, CreateDir, QuickRename, Properties). |
-| `src/s3darkmode.cpp` | Vykreslování a stylování dialogů v tmavém režimu. |
 | `src/menu.cpp` | Obsluha položek menu (Odpojit, Spočítat velikost, Úprava souboru). |
 | `src/lang/` | České a anglické textové zdroje a dialogové šablony pro `.slg`. |
 | `test/test_sigv4.cpp` | Jednotkové testy pro SigV4 podpis a parsování AWS profilů. |
@@ -62,17 +61,13 @@ Samostatný souborový plugin (FS) pro [Open Salamander 5.0](https://github.com/
 
 ## Sestavení
 
-### Možnost A: Přes MinGW-w64 (WSL / MSYS2)
-```bash
-make -f Makefile.mingw
-```
+Vyžaduje Visual Studio (MSVC, x64) a plugin SDK Open Salamanderu (`plugins\shared`). SDK se hledá v `..\..\samandarin\src` vzhledem k tomuto repozitáři; lze přepsat pomocí `/p:SalamanderSdkDir=<cesta do adresáře obsahujícího plugins\shared>`.
 
-Příkaz vytvoří `s3.spl`, `Czech.slg` a `English.slg`.
-
-### Možnost B: Přes Visual Studio (MSBuild)
 ```powershell
 MSBuild src\vcxproj\s3.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
+
+Výstup je v `build\Release_x64\`: `s3.spl`, `lang\english.slg` a `lang\czech.slg`.
 
 ---
 

@@ -53,7 +53,6 @@ A standalone **Amazon S3** and S3-compatible cloud object storage filesystem plu
 | `src/s3glue.h/.cpp` | Integration glue between Open Salamander FS interface and `CS3Connection`. |
 | `src/fs1.cpp` | Connection dialog (`ConnectDlgProc`), profile tree, and credential setup UI. |
 | `src/fs2.cpp` | Main filesystem operations (ChangePath, ListCurrentPath, Copy, Delete, CreateDir, QuickRename, Properties). |
-| `src/s3darkmode.cpp` | Dark mode styling for custom controls and dialogs. |
 | `src/menu.cpp` | Menu command handlers (Disconnect, Calculate Size, Edit file). |
 | `src/lang/` | English and Czech resource string definitions and dialog templates. |
 | `test/test_sigv4.cpp` | Unit tests for SigV4 signing and AWS credential parsing. |
@@ -62,17 +61,13 @@ A standalone **Amazon S3** and S3-compatible cloud object storage filesystem plu
 
 ## Building
 
-### Option A: Using MinGW-w64 (via WSL or MSYS2)
-```bash
-make -f Makefile.mingw
-```
+Requires Visual Studio (MSVC, x64) and the Open Salamander plugin SDK (`plugins\shared`). The SDK is looked up in `..\..\samandarin\src` relative to this repository; override with `/p:SalamanderSdkDir=<path to a directory containing plugins\shared>`.
 
-This generates `s3.spl`, `English.slg`, and `Czech.slg`.
-
-### Option B: Using Visual Studio (MSBuild)
 ```powershell
 MSBuild src\vcxproj\s3.vcxproj /p:Configuration=Release /p:Platform=x64
 ```
+
+Output goes to `build\Release_x64\`: `s3.spl`, `lang\english.slg` and `lang\czech.slg`.
 
 ---
 
