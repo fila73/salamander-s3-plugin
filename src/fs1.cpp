@@ -268,7 +268,7 @@ static void ShowConnectPage(HWND hDlg, int page)
     while (hChild != NULL)
     {
         int id = GetDlgCtrlID(hChild);
-        if (id != IDC_CATTREE && id != IDOK && id != IDC_SESS_SAVE && id != IDCANCEL)
+        if (id != IDC_CATTREE && id != IDOK && id != IDC_SESS_SAVE && id != IDC_SESS_SAVECUR && id != IDCANCEL)
         {
             if (id == IDC_SESSIONS || id == IDC_SESS_NEW || id == IDC_SESS_EDIT ||
                 id == IDC_SESS_DELETE || id == IDC_SESS_RENAME)
@@ -438,6 +438,7 @@ static INT_PTR CALLBACK ConnectDlgProc(HWND hDlg, UINT uMsg, WPARAM wParam, LPAR
         }
 
         case IDC_SESS_SAVE:
+        case IDC_SESS_SAVECUR:
         {
             S3Profile prof;
             ReadProfileFromDialog(hDlg, prof);
