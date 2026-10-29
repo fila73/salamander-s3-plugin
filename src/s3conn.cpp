@@ -4,6 +4,7 @@
 
 #include "s3conn.h"
 #include "s3sigv4.h"
+#include "s3safe.h"
 #include <sstream>
 #include <algorithm>
 #include <cctype>
@@ -585,6 +586,13 @@ bool CS3Connection::DownloadFile(
     std::string& outError
 )
 {
+    if (resumeOffset > 0)
+    {
+        // Downloads go to a temp file that is swapped in at the end; resuming is not supported.
+        outError = "Resuming a download is not supported.";
+        return false;
+    }
+
     std::string host = BuildHostHeader(bucket);
     std::string path = BuildRequestPath(bucket, key);
 
@@ -597,11 +605,6 @@ bool CS3Connection::DownloadFile(
     sigReq.Region = m_profile.Region;
     sigReq.Service = "s3";
     sigReq.Headers["host"] = host;
-
-    if (resumeOffset > 0)
-    {
-        sigReq.Headers["range"] = "bytes=" + std::to_string(resumeOffset) + "-";
-    }
 
     if (!S3Auth::SignRequest(sigReq))
     {
@@ -653,24 +656,34 @@ bool CS3Connection::DownloadFile(
         return false;
     }
 
-    // Get Content-Length
+    // Get Content-Length (used to verify the download is complete)
     wchar_t clBuf[64] = { 0 };
     DWORD clBufSize = sizeof(clBuf);
     uint64_t totalBytes = 0;
+    bool hasExpected = false;
     if (WinHttpQueryHeaders(hRequest, WINHTTP_QUERY_CONTENT_LENGTH, WINHTTP_HEADER_NAME_BY_INDEX, clBuf, &clBufSize, WINHTTP_NO_HEADER_INDEX))
     {
-        totalBytes = _wtoi64(clBuf) + resumeOffset;
+        wchar_t* endp = NULL;
+        unsigned long long v = _wcstoui64(clBuf, &endp, 10);
+        if (endp != clBuf)
+        {
+            totalBytes = v;
+            hasExpected = true;
+        }
     }
 
-    HANDLE hFile = CreateFileW(
-        localFilePath,
-        GENERIC_WRITE,
-        FILE_SHARE_READ,
-        NULL,
-        (resumeOffset > 0) ? OPEN_ALWAYS : CREATE_ALWAYS,
-        FILE_ATTRIBUTE_NORMAL,
-        NULL
-    );
+    // Download into a temp file next to the target; the target is replaced only after
+    // the whole body was received, written and flushed successfully.
+    std::wstring targetW = localFilePath;
+    std::wstring tempW;
+    HANDLE hFile = INVALID_HANDLE_VALUE;
+    for (unsigned attempt = 0; attempt < 100 && hFile == INVALID_HANDLE_VALUE; attempt++)
+    {
+        tempW = S3MakeTempPath(targetW, attempt);
+        hFile = CreateFileW(tempW.c_str(), GENERIC_WRITE, 0, NULL, CREATE_NEW, FILE_ATTRIBUTE_NORMAL, NULL);
+        if (hFile == INVALID_HANDLE_VALUE && GetLastError() != ERROR_FILE_EXISTS && GetLastError() != ERROR_ALREADY_EXISTS)
+            break;
+    }
 
     if (hFile == INVALID_HANDLE_VALUE)
     {
@@ -680,29 +693,40 @@ bool CS3Connection::DownloadFile(
         return false;
     }
 
-    if (resumeOffset > 0)
-    {
-        LARGE_INTEGER li;
-        li.QuadPart = (LONGLONG)resumeOffset;
-        SetFilePointerEx(hFile, li, NULL, FILE_BEGIN);
-    }
-
-    uint64_t currentBytes = resumeOffset;
+    uint64_t currentBytes = 0;
     bool canceled = false;
-    DWORD bytesAvailable = 0;
+    bool failed = false;
     std::vector<char> buffer(64 * 1024); // 64KB buffer
 
-    while (WinHttpQueryDataAvailable(hRequest, &bytesAvailable) && bytesAvailable > 0)
+    for (;;)
     {
-        DWORD toRead = (DWORD)std::min<size_t>(bytesAvailable, buffer.size());
-        DWORD bytesRead = 0;
-        if (!WinHttpReadData(hRequest, buffer.data(), toRead, &bytesRead) || bytesRead == 0)
+        DWORD bytesAvailable = 0;
+        if (!WinHttpQueryDataAvailable(hRequest, &bytesAvailable))
         {
+            outError = "Connection error while downloading (WinHTTP error " + std::to_string(GetLastError()) + ").";
+            failed = true;
             break;
         }
+        if (bytesAvailable == 0)
+            break; // regular end of body
 
-        DWORD bytesWritten = 0;
-        WriteFile(hFile, buffer.data(), bytesRead, &bytesWritten, NULL);
+        DWORD toRead = (DWORD)std::min<size_t>(bytesAvailable, buffer.size());
+        DWORD bytesRead = 0;
+        if (!WinHttpReadData(hRequest, buffer.data(), toRead, &bytesRead))
+        {
+            outError = "Connection error while downloading (WinHTTP error " + std::to_string(GetLastError()) + ").";
+            failed = true;
+            break;
+        }
+        if (bytesRead == 0)
+            break;
+
+        if (!S3WriteAll(hFile, buffer.data(), bytesRead))
+        {
+            outError = "Cannot write local file (error " + std::to_string(GetLastError()) + "), disk full?";
+            failed = true;
+            break;
+        }
         currentBytes += bytesRead;
 
         if (progressCb && !progressCb(currentBytes, totalBytes, userData))
@@ -712,13 +736,39 @@ bool CS3Connection::DownloadFile(
         }
     }
 
-    CloseHandle(hFile);
     WinHttpCloseHandle(hRequest);
     WinHttpCloseHandle(hConnect);
 
-    if (canceled)
+    if (!canceled && !failed && !S3ReceivedSizeOk(currentBytes, hasExpected, totalBytes))
     {
-        outError = "Download canceled by user.";
+        outError = "Download incomplete: received " + std::to_string(currentBytes) + " of " +
+                   std::to_string(totalBytes) + " bytes.";
+        failed = true;
+    }
+    if (!canceled && !failed && !FlushFileBuffers(hFile))
+    {
+        outError = "Cannot flush local file (error " + std::to_string(GetLastError()) + ").";
+        failed = true;
+    }
+    if (!CloseHandle(hFile) && !canceled && !failed)
+    {
+        outError = "Cannot close local file (error " + std::to_string(GetLastError()) + ").";
+        failed = true;
+    }
+
+    if (canceled || failed)
+    {
+        DeleteFileW(tempW.c_str()); // only the temp file; an existing target stays untouched
+        if (canceled)
+            outError = "Download canceled by user.";
+        return false;
+    }
+
+    DWORD replErr = 0;
+    if (!S3ReplaceFile(tempW, targetW, &replErr))
+    {
+        DeleteFileW(tempW.c_str());
+        outError = "Cannot replace local file (error " + std::to_string(replErr) + ").";
         return false;
     }
 

@@ -501,7 +501,19 @@ bool S3UploadSingleFile(const char* localFilePath, const char* s3Path, std::stri
     return S3Conn.UploadFile(bucket, prefix, localW.c_str(), S3InternalProgress, (void*)fileName, outError);
 }
 
-bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError)
+static void S3ReportFail(S3TransferReport* report, const std::string& item, const std::string& err)
+{
+    if (report)
+        report->FailedItems.push_back(item + ": " + err);
+}
+
+static bool S3IsCancelError(const std::string& err)
+{
+    return err.find("canceled") != std::string::npos;
+}
+
+bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError,
+                         S3TransferReport* report)
 {
     if (!isDir)
     {
@@ -509,7 +521,14 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         const char* name = slash ? slash + 1 : s3Path;
         char localTargetFile[MAX_PATH * 2];
         snprintf(localTargetFile, sizeof(localTargetFile), "%s\\%s", localTargetDir, name);
-        return S3DownloadSingleFile(s3Path, localTargetFile, outError);
+        if (S3DownloadSingleFile(s3Path, localTargetFile, outError))
+        {
+            if (report) report->DoneItems.push_back(s3Path);
+            return true;
+        }
+        if (S3IsCancelError(outError) && report) report->Canceled = true;
+        S3ReportFail(report, s3Path, outError);
+        return false;
     }
 
     std::string bucket, prefix;
@@ -533,27 +552,53 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
     std::vector<S3ObjectInfo> items;
     if (!S3Conn.ListDirectory(bucket, prefix, items, outError))
     {
+        S3ReportFail(report, s3Path, "listing failed: " + outError);
         return false;
     }
 
+    // Keep going after a failed child so that everything that can be downloaded is, but
+    // remember every failure: the caller must not delete the source unless all succeeded.
+    bool allOk = true;
+    std::string firstError;
     for (const auto& item : items)
     {
         char itemS3Path[MAX_PATH * 2];
         snprintf(itemS3Path, sizeof(itemS3Path), "/%s/%s", bucket.c_str(), item.Key.c_str());
+        std::string childErr;
+        bool ok;
         if (item.IsDirectory)
         {
-            if (!S3DownloadRecursive(itemS3Path, subLocalDir, true, outError))
-                return false;
+            ok = S3DownloadRecursive(itemS3Path, subLocalDir, true, childErr, report);
         }
         else
         {
             char targetLocalFile[MAX_PATH * 2];
             snprintf(targetLocalFile, sizeof(targetLocalFile), "%s\\%s", subLocalDir, item.DisplayName.c_str());
-            if (!S3DownloadSingleFile(itemS3Path, targetLocalFile, outError))
-                return false;
+            ok = S3DownloadSingleFile(itemS3Path, targetLocalFile, childErr);
+            if (ok)
+            {
+                if (report) report->DoneItems.push_back(itemS3Path);
+            }
+            else
+            {
+                if (S3IsCancelError(childErr) && report) report->Canceled = true;
+                S3ReportFail(report, itemS3Path, childErr);
+            }
+        }
+        if (!ok)
+        {
+            allOk = false;
+            if (firstError.empty()) firstError = childErr;
+            if (S3IsCancelError(childErr))
+                break; // user canceled: stop everything
         }
     }
 
+    if (!allOk)
+    {
+        outError = firstError;
+        return false;
+    }
     return true;
 }
 

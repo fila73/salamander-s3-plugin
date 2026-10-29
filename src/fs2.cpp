@@ -923,20 +923,50 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromFS(BOOL copy, int mode, const char
         S3Join(Path, f->Name, s3ItemPath, MAX_PATH);
 
         std::string err;
-        if (!S3DownloadRecursive(s3ItemPath, target, isDir != FALSE, err))
+        S3TransferReport report;
+        if (!S3DownloadRecursive(s3ItemPath, target, isDir != FALSE, err, &report))
         {
-            char msg[512];
-            snprintf(msg, sizeof(msg), "Error downloading \"%s\":\n%s\n\nContinue with other items?", f->Name, err.c_str());
-            if (SalamanderGeneral->SalMessageBox(parent, msg, LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO)
+            // Move: remove only what was fully downloaded; the failed items (and the folders
+            // that still contain them) stay on S3.
+            std::string moveNote;
+            if (!copy && isDir)
+            {
+                int removed = 0, removeFailed = 0;
+                for (const auto& done : report.DoneItems)
+                {
+                    std::string delErr;
+                    if (S3DeleteRecursive(done.c_str(), false, delErr)) removed++; else removeFailed++;
+                }
+                moveNote = "\n\nMove: " + std::to_string(removed) + " downloaded file(s) removed from S3";
+                if (removeFailed > 0) moveNote += ", " + std::to_string(removeFailed) + " could not be removed";
+                moveNote += "; the rest was left on S3.";
+            }
+            else if (!copy)
+            {
+                moveNote = "\n\nThe source was NOT deleted.";
+            }
+            std::string failList;
+            for (size_t i = 0; i < report.FailedItems.size() && i < 5; i++)
+                failList += "\n" + report.FailedItems[i];
+            if (report.FailedItems.size() > 5)
+                failList += "\n... (" + std::to_string(report.FailedItems.size() - 5) + " more)";
+            std::string msg = std::string("Error downloading \"") + f->Name + "\":\n" + err + failList + moveNote;
+            msg += "\n\nContinue with other items?";
+            if (SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO || report.Canceled)
             {
                 success = FALSE;
                 cancelOrHandlePath = TRUE;
                 break;
             }
         }
-        else if (!copy)
+        else if (!copy && S3MayDeleteWholeSource(report))
         {
-            S3DeleteRecursive(s3ItemPath, isDir != FALSE, err);
+            std::string delErr;
+            if (!S3DeleteRecursive(s3ItemPath, isDir != FALSE, delErr))
+            {
+                std::string msg = std::string("Downloaded \"") + f->Name + "\" but could not remove it from S3:\n" + delErr;
+                SalamanderGeneral->SalMessageBox(parent, msg.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            }
         }
 
         if (focused)

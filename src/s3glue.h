@@ -6,6 +6,7 @@
 
 #include "s3conn.h"
 #include "awscred.h"
+#include "s3safe.h"
 
 extern CS3Connection S3Conn;
 extern S3Profile S3ActiveProfile;
@@ -43,7 +44,8 @@ bool S3ProgressCheckCancel();
 
 bool S3DownloadSingleFile(const char* s3Path, const char* localFilePath, std::string& outError);
 bool S3UploadSingleFile(const char* localFilePath, const char* s3Path, std::string& outError);
-bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError);
+bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool isDir, std::string& outError,
+                         S3TransferReport* report = nullptr);
 bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError);
 bool S3DeleteRecursive(const char* s3Path, bool isDir, std::string& outError);
 void S3LocalDeleteRecursive(const char* localPath, bool isDir);
