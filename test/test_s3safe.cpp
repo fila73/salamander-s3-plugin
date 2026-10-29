@@ -162,6 +162,42 @@ static void TestRenameHelpers()
     CHECK(S3MayDeleteOldPrefix(0, 0, true));
 }
 
+static bool Safe(const char* n) { std::string r; return S3IsSafeLocalComponent(n, "k/" + std::string(n), r); }
+
+static void TestSafeNames()
+{
+    CHECK(Safe("file.txt"));
+    CHECK(Safe("my file (1).tar.gz"));
+    CHECK(Safe(".gitignore"));
+    CHECK(Safe("console.txt"));     // not a reserved name
+    CHECK(Safe("COM10"));           // only COM1-9 are reserved
+    CHECK(!Safe(""));
+    CHECK(!Safe("."));
+    CHECK(!Safe(".."));
+    CHECK(!Safe("..\\evil"));
+    CHECK(!Safe("a/b"));
+    CHECK(!Safe("a\\b"));
+    CHECK(!Safe("C:evil"));
+    CHECK(!Safe("name."));
+    CHECK(!Safe("name "));
+    CHECK(!Safe("a*b"));
+    CHECK(!Safe("a|b"));
+    CHECK(!Safe("a\x01" "b"));
+    CHECK(!Safe("CON"));
+    CHECK(!Safe("con"));
+    CHECK(!Safe("NUL.txt"));
+    CHECK(!Safe("Aux.tar.gz"));
+    CHECK(!Safe("com1"));
+    CHECK(!Safe("LPT9.log"));
+    CHECK(!Safe("CON .txt"));
+    std::string r;
+    S3IsSafeLocalComponent("..", "dir/..", r);
+    CHECK(r.find("dir/..") != std::string::npos); // message lists the key
+    CHECK(S3LastComponent("a/b/c.txt") == "c.txt");
+    CHECK(S3LastComponent("a/b/") == "b");
+    CHECK(S3LastComponent("x") == "x");
+}
+
 int main()
 {
     wchar_t tmp[MAX_PATH];
@@ -175,6 +211,7 @@ int main()
     TestMoveDecision();
     TestStreamingUpload();
     TestRenameHelpers();
+    TestSafeNames();
 
     RemoveDirectoryW(g_dir.c_str());
     printf("passed=%d failed=%d\n", g_pass, g_fail);

@@ -198,3 +198,51 @@ inline bool S3MayDeleteOldPrefix(size_t totalObjects, size_t copiedOk, bool list
 {
     return listingOk && copiedOk == totalObjects;
 }
+
+// ---------------------------------------------------------------------------
+// Local path component safety (S3 keys are arbitrary strings)
+// ---------------------------------------------------------------------------
+
+#include <cctype>
+
+// True if `name` can be used as ONE local path component without escaping the target
+// directory or hitting a device. On false, `reason` says why. `key` is only used in the message.
+inline bool S3IsSafeLocalComponent(const std::string& name, const std::string& key, std::string& reason)
+{
+    auto fail = [&](const char* why)
+    {
+        reason = std::string("Unsafe object name \"") + key + "\": " + why + ".";
+        return false;
+    };
+    if (name.empty()) return fail("empty name");
+    if (name == "." || name == "..") return fail("'.' and '..' are not allowed");
+    for (unsigned char c : name)
+    {
+        if (c < 32) return fail("control character");
+        if (c == '\\' || c == '/') return fail("contains a path separator");
+        if (c == ':') return fail("contains ':'");
+        if (c == '*' || c == '?' || c == '"' || c == '<' || c == '>' || c == '|') return fail("contains a character not allowed in file names");
+    }
+    char last = name.back();
+    if (last == '.' || last == ' ') return fail("name ends with a dot or space");
+
+    // reserved device names, with or without extension: CON, PRN, AUX, NUL, COM1-9, LPT1-9
+    std::string stem = name.substr(0, name.find('.'));
+    while (!stem.empty() && stem.back() == ' ') stem.pop_back();
+    std::string up;
+    for (unsigned char c : stem) up += (char)std::toupper(c);
+    bool reserved = (up == "CON" || up == "PRN" || up == "AUX" || up == "NUL");
+    if (up.size() == 4 && (up.compare(0, 3, "COM") == 0 || up.compare(0, 3, "LPT") == 0) && up[3] >= '1' && up[3] <= '9')
+        reserved = true;
+    if (reserved) return fail("reserved device name");
+    return true;
+}
+
+// Last component of an S3 path/key ("a/b/c.txt" -> "c.txt", trailing '/' ignored).
+inline std::string S3LastComponent(const std::string& path)
+{
+    std::string p = path;
+    while (!p.empty() && p.back() == '/') p.pop_back();
+    size_t s = p.rfind('/');
+    return s == std::string::npos ? p : p.substr(s + 1);
+}

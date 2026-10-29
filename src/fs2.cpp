@@ -814,6 +814,15 @@ void WINAPI CPluginFSInterface::ViewFile(const char* fsName, HWND parent,
                                         CSalamanderForViewFileOnFSAbstract* salamander,
                                         CFileData& file)
 {
+    {
+        std::string nameErr;
+        if (!S3IsSafeLocalComponent(file.Name, std::string(Path) + "/" + file.Name, nameErr))
+        {
+            SalamanderGeneral->SalMessageBox(parent, nameErr.c_str(), LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
+    }
+
     char uniqueFileName[2 * MAX_PATH];
     strcpy(uniqueFileName, fsName);
     strcat(uniqueFileName, ":");

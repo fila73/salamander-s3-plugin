@@ -519,6 +519,11 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
     {
         const char* slash = strrchr(s3Path, '/');
         const char* name = slash ? slash + 1 : s3Path;
+        if (!S3IsSafeLocalComponent(name, s3Path, outError))
+        {
+            S3ReportFail(report, s3Path, outError);
+            return false;
+        }
         char localTargetFile[MAX_PATH * 2];
         snprintf(localTargetFile, sizeof(localTargetFile), "%s\\%s", localTargetDir, name);
         if (S3DownloadSingleFile(s3Path, localTargetFile, outError))
@@ -544,6 +549,11 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
     size_t lastSlash = dirName.rfind('/');
     if (lastSlash != std::string::npos) dirName = dirName.substr(lastSlash + 1);
     if (dirName.empty()) dirName = bucket;
+    if (!S3IsSafeLocalComponent(dirName, s3Path, outError))
+    {
+        S3ReportFail(report, s3Path, outError);
+        return false;
+    }
 
     char subLocalDir[MAX_PATH * 2];
     snprintf(subLocalDir, sizeof(subLocalDir), "%s\\%s", localTargetDir, dirName.c_str());
@@ -569,6 +579,11 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
         if (item.IsDirectory)
         {
             ok = S3DownloadRecursive(itemS3Path, subLocalDir, true, childErr, report);
+        }
+        else if (!S3IsSafeLocalComponent(item.DisplayName, item.Key, childErr))
+        {
+            ok = false;
+            S3ReportFail(report, itemS3Path, childErr);
         }
         else
         {

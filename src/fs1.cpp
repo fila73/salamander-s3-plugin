@@ -127,6 +127,13 @@ void WINAPI CPluginInterfaceForFS::ExecuteOnFS(int panel, CPluginFSInterfaceAbst
         SalamanderGeneral->SetUserWorkedOnPanelPath(panel);
         char remote[MAX_PATH];
         S3Join(fs->Path, file.Name, remote, MAX_PATH);
+        std::string nameErr;
+        if (!S3IsSafeLocalComponent(file.Name, remote, nameErr))
+        {
+            SalamanderGeneral->SalMessageBox(SalamanderGeneral->GetMsgBoxParent(), nameErr.c_str(),
+                                             LoadStr(IDS_PLUGINNAME), MB_OK | MB_ICONEXCLAMATION);
+            return;
+        }
         char tmpDir[MAX_PATH], tmpFile[MAX_PATH];
         GetTempPathA(MAX_PATH, tmpDir);
         lstrcpynA(tmpFile, tmpDir, MAX_PATH);
