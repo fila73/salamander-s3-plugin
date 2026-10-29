@@ -2,6 +2,7 @@
 #include "../src/s3safe.h"
 #include <cstdio>
 #include <cstring>
+#include <vector>
 
 static int g_fail = 0, g_pass = 0;
 #define CHECK(c) do { if (c) g_pass++; else { g_fail++; printf("FAIL %s:%d  %s\n", __FILE__, __LINE__, #c); } } while (0)
@@ -98,6 +99,55 @@ static void TestMoveDecision()
     CHECK(!S3MayDeleteWholeSource(c));
 }
 
+static void TestStreamingUpload()
+{
+    // chunk iteration
+    CHECK(S3NextChunk(0, 10, 4) == 4);
+    CHECK(S3NextChunk(8, 10, 4) == 2);
+    CHECK(S3NextChunk(10, 10, 4) == 0);
+    CHECK(S3NextChunk(0, 0, 4) == 0);
+    CHECK(S3NextChunk(5000000000ULL, 6000000000ULL, S3_IO_CHUNK) == S3_IO_CHUNK); // 64-bit offsets
+    uint64_t total = 1000003, done = 0, chunks = 0;
+    while (DWORD n = S3NextChunk(done, total, S3_IO_CHUNK)) { done += n; chunks++; }
+    CHECK(done == total && chunks == 4);
+
+    // size limit
+    std::string e;
+    CHECK(S3CheckUploadSize(S3_MAX_SINGLE_PUT, e));
+    CHECK(!S3CheckUploadSize(S3_MAX_SINGLE_PUT + 1, e) && e.find("5 GiB") != std::string::npos);
+
+    // streamed hash of a real file (1,000,000 x 'a' spans several chunks)
+    std::wstring p = g_dir + L"\\hash.bin";
+    std::string big(1000000, 'a');
+    CHECK(WriteTxt(p, big.c_str()));
+    std::vector<char> buf(S3_IO_CHUNK);
+    HANDLE h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    std::string hex, err;
+    CHECK(S3HashFileStream(h, big.size(), buf.data(), hex, err));
+    CHECK(hex == "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0");
+
+    // abc
+    CloseHandle(h);
+    CHECK(WriteTxt(p, "abc"));
+    h = CreateFileW(p.c_str(), GENERIC_READ, FILE_SHARE_READ, NULL, OPEN_EXISTING, 0, NULL);
+    CHECK(S3HashFileStream(h, 3, buf.data(), hex, err));
+    CHECK(hex == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+    // empty
+    CHECK(S3HashFileStream(h, 0, buf.data(), hex, err));
+    CHECK(hex == "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855");
+    // file shorter than announced size -> failure, not silent success
+    LARGE_INTEGER z; z.QuadPart = 0; SetFilePointerEx(h, z, NULL, FILE_BEGIN);
+    err.clear();
+    CHECK(!S3HashFileStream(h, 10, buf.data(), hex, err) && !err.empty());
+    // read error (write-only handle) is reported
+    CloseHandle(h);
+    HANDLE w = CreateFileW(p.c_str(), GENERIC_WRITE, 0, NULL, OPEN_EXISTING, 0, NULL);
+    err.clear();
+    CHECK(!S3HashFileStream(w, 3, buf.data(), hex, err) && !err.empty());
+    CloseHandle(w);
+    DeleteFileW(p.c_str());
+}
+
 int main()
 {
     wchar_t tmp[MAX_PATH];
@@ -109,6 +159,7 @@ int main()
     TestReplace();
     TestWriteAll();
     TestMoveDecision();
+    TestStreamingUpload();
 
     RemoveDirectoryW(g_dir.c_str());
     printf("passed=%d failed=%d\n", g_pass, g_fail);

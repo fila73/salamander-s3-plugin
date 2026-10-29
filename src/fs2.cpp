@@ -1040,11 +1040,26 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromDiskToFS(BOOL copy, int mode, cons
         SalamanderGeneral->SalPathAppend(local, name, 2 * MAX_PATH);
 
         std::string err;
-        if (!S3UploadRecursive(local, remoteDir, isDir != FALSE, err))
+        S3TransferReport report;
+        if (!S3UploadRecursive(local, remoteDir, isDir != FALSE, err, &report))
         {
-            char eb[700];
-            snprintf(eb, sizeof(eb), "Error uploading \"%s\":\n%s\n\nContinue with other items?", name, err.c_str());
-            if (SalamanderGeneral->SalMessageBox(parent, eb, LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO)
+            // Move: delete only the local files that were actually uploaded; failed files
+            // and the folders containing them stay on disk.
+            std::string moveNote;
+            if (!copy)
+            {
+                for (const auto& done : report.DoneItems)
+                    S3LocalDeleteRecursive(done.c_str(), false);
+                moveNote = "\n\nMove: only the successfully uploaded files were deleted locally.";
+            }
+            std::string failList;
+            for (size_t i = 0; i < report.FailedItems.size() && i < 5; i++)
+                failList += "\n" + report.FailedItems[i];
+            if (report.FailedItems.size() > 5)
+                failList += "\n... (" + std::to_string(report.FailedItems.size() - 5) + " more)";
+            std::string eb = std::string("Error uploading \"") + name + "\":\n" + err + failList + moveNote;
+            eb += "\n\nContinue with other items?";
+            if (SalamanderGeneral->SalMessageBox(parent, eb.c_str(), LoadStr(IDS_PLUGINNAME), MB_YESNO | MB_ICONEXCLAMATION) == IDNO || report.Canceled)
             {
                 success = FALSE;
                 if (invalidPathOrCancel != NULL)
@@ -1054,7 +1069,7 @@ BOOL WINAPI CPluginFSInterface::CopyOrMoveFromDiskToFS(BOOL copy, int mode, cons
             continue;
         }
 
-        if (!copy)
+        if (!copy && S3MayDeleteWholeSource(report))
         {
             S3LocalDeleteRecursive(local, isDir != FALSE);
         }

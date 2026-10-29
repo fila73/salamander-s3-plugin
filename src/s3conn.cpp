@@ -784,6 +784,34 @@ bool CS3Connection::UploadFile(
     std::string& outError
 )
 {
+    try
+    {
+        return UploadFileStreaming(bucket, key, localFilePath, progressCb, userData, outError);
+    }
+    catch (const std::bad_alloc&)
+    {
+        outError = "Out of memory while uploading.";
+    }
+    catch (const std::exception& e)
+    {
+        outError = std::string("Unexpected error while uploading: ") + e.what();
+    }
+    catch (...)
+    {
+        outError = "Unexpected error while uploading.";
+    }
+    return false;
+}
+
+bool CS3Connection::UploadFileStreaming(
+    const std::string& bucket,
+    const std::string& key,
+    const wchar_t* localFilePath,
+    S3ProgressCallback progressCb,
+    void* userData,
+    std::string& outError
+)
+{
     HANDLE hFile = CreateFileW(
         localFilePath,
         GENERIC_READ,
@@ -799,18 +827,41 @@ bool CS3Connection::UploadFile(
         outError = "Cannot open local file for reading.";
         return false;
     }
+    struct FileGuard { HANDLE h; ~FileGuard() { CloseHandle(h); } } fileGuard = { hFile };
 
     LARGE_INTEGER liSize;
-    GetFileSizeEx(hFile, &liSize);
+    if (!GetFileSizeEx(hFile, &liSize) || liSize.QuadPart < 0)
+    {
+        outError = "Cannot determine local file size.";
+        return false;
+    }
     uint64_t fileSize = (uint64_t)liSize.QuadPart;
 
-    std::vector<char> fileData((size_t)fileSize);
-    DWORD bytesRead = 0;
-    if (fileSize > 0)
+    if (!S3CheckUploadSize(fileSize, outError))
     {
-        ReadFile(hFile, fileData.data(), (DWORD)fileSize, &bytesRead, NULL);
+        return false;
     }
-    CloseHandle(hFile);
+
+    // The file is streamed from disk in chunks; it is never held in memory as a whole.
+    // Payload hash: first streaming pass computes the SHA-256 (signed payload). This works
+    // for HTTP and HTTPS endpoints alike; UNSIGNED-PAYLOAD would only be acceptable over TLS
+    // and would drop the integrity check S3 does on the body. If the file changes between the
+    // passes, S3 rejects the body (hash/length mismatch) so nothing wrong is stored.
+    std::vector<char> ioBuf(S3_IO_CHUNK);
+    std::string payloadHash;
+    if (!S3HashFileStream(hFile, fileSize, ioBuf.data(), payloadHash, outError))
+    {
+        return false;
+    }
+    {
+        LARGE_INTEGER zero;
+        zero.QuadPart = 0;
+        if (!SetFilePointerEx(hFile, zero, NULL, FILE_BEGIN))
+        {
+            outError = "Cannot rewind local file.";
+            return false;
+        }
+    }
 
     std::string host = BuildHostHeader(bucket);
     std::string path = BuildRequestPath(bucket, key);
@@ -823,7 +874,7 @@ bool CS3Connection::UploadFile(
     sigReq.SessionToken = m_profile.SessionToken;
     sigReq.Region = m_profile.Region;
     sigReq.Service = "s3";
-    sigReq.PayloadHashHex = S3Auth::Sha256Hex(fileData.data(), fileData.size());
+    sigReq.PayloadHashHex = payloadHash;
     sigReq.Headers["host"] = host;
     sigReq.Headers["content-length"] = std::to_string(fileSize);
 
@@ -856,7 +907,9 @@ bool CS3Connection::UploadFile(
         headersW += ToWide(it->first) + L": " + ToWide(it->second) + L"\r\n";
     }
 
-    if (!WinHttpSendRequest(hRequest, headersW.c_str(), (DWORD)headersW.length(), NULL, 0, (DWORD)fileSize, 0))
+    // dwTotalLength is a DWORD; for bodies >= 4 GiB the signed content-length header carries the size.
+    DWORD totalLen = (fileSize <= 0xFFFFFFFFull) ? (DWORD)fileSize : 0;
+    if (!WinHttpSendRequest(hRequest, headersW.c_str(), (DWORD)headersW.length(), NULL, 0, totalLen, 0))
     {
         outError = "WinHttpSendRequest failed.";
         WinHttpCloseHandle(hRequest);
@@ -865,8 +918,9 @@ bool CS3Connection::UploadFile(
     }
 
     uint64_t bytesSent = 0;
-    const size_t chunkSize = 64 * 1024;
     bool canceled = false;
+    bool sendFailed = false;
+    std::string sendErr;
 
     if (fileSize == 0)
     {
@@ -874,16 +928,33 @@ bool CS3Connection::UploadFile(
             canceled = true;
     }
 
-    while (bytesSent < fileSize && !canceled)
+    while (!canceled && !sendFailed)
     {
-        DWORD toWrite = (DWORD)std::min<uint64_t>(chunkSize, fileSize - bytesSent);
-        DWORD written = 0;
-        if (!WinHttpWriteData(hRequest, fileData.data() + bytesSent, toWrite, &written) || written == 0)
+        DWORD toRead = S3NextChunk(bytesSent, fileSize, S3_IO_CHUNK);
+        if (toRead == 0)
+            break;
+        DWORD got = 0;
+        if (!ReadFile(hFile, ioBuf.data(), toRead, &got, NULL) || got != toRead)
         {
-            outError = "WinHttpWriteData failed.";
+            sendErr = "Cannot read local file while uploading (error " + std::to_string(GetLastError()) + ").";
+            sendFailed = true;
             break;
         }
-        bytesSent += written;
+        DWORD off = 0;
+        while (off < got)
+        {
+            DWORD written = 0;
+            if (!WinHttpWriteData(hRequest, ioBuf.data() + off, got - off, &written) || written == 0)
+            {
+                sendErr = "WinHttpWriteData failed (error " + std::to_string(GetLastError()) + ").";
+                sendFailed = true;
+                break;
+            }
+            off += written;
+        }
+        if (sendFailed)
+            break;
+        bytesSent += got;
         if (progressCb && !progressCb(bytesSent, fileSize, userData))
         {
             canceled = true;
@@ -891,9 +962,10 @@ bool CS3Connection::UploadFile(
         }
     }
 
-    if (canceled)
+    if (canceled || sendFailed)
     {
-        outError = "Upload canceled by user.";
+        // Closing the request before the announced Content-Length was sent makes S3 discard the body.
+        outError = canceled ? "Upload canceled by user." : sendErr;
         WinHttpCloseHandle(hRequest);
         WinHttpCloseHandle(hConnect);
         return false;

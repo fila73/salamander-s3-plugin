@@ -83,6 +83,15 @@ private:
         std::string& outError
     );
 
+    bool UploadFileStreaming(
+        const std::string& bucket,
+        const std::string& key,
+        const wchar_t* localFilePath,
+        S3ProgressCallback progressCb,
+        void* userData,
+        std::string& outError
+    );
+
 public:
     CS3Connection();
     ~CS3Connection();

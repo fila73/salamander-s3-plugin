@@ -602,7 +602,8 @@ bool S3DownloadRecursive(const char* s3Path, const char* localTargetDir, bool is
     return true;
 }
 
-bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError)
+bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDir, std::string& outError,
+                       S3TransferReport* report)
 {
     const char* bs = strrchr(localPath, '\\');
     const char* slash = strrchr(localPath, '/');
@@ -614,7 +615,17 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
 
     if (!isDir)
     {
-        return S3UploadSingleFile(localPath, remoteDest, outError);
+        if (S3UploadSingleFile(localPath, remoteDest, outError))
+        {
+            if (report) report->DoneItems.push_back(localPath);
+            return true;
+        }
+        if (report)
+        {
+            if (S3IsCancelError(outError)) report->Canceled = true;
+            report->FailedItems.push_back(std::string(localPath) + ": " + outError);
+        }
+        return false;
     }
 
     std::string bucket, prefix;
@@ -629,7 +640,13 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
     {
         std::string folderKey = prefix;
         if (folderKey.back() != '/') folderKey += "/";
-        S3Conn.CreateFolder(bucket, folderKey, outError);
+        std::string folderErr;
+        if (!S3Conn.CreateFolder(bucket, folderKey, folderErr))
+        {
+            outError = folderErr;
+            S3ReportFail(report, localPath, "cannot create folder: " + folderErr);
+            return false;
+        }
     }
 
     char searchPattern[MAX_PATH * 2];
@@ -637,8 +654,19 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
 
     WIN32_FIND_DATAA fd;
     HANDLE hFind = FindFirstFileA(searchPattern, &fd);
-    if (hFind == INVALID_HANDLE_VALUE) return true;
+    if (hFind == INVALID_HANDLE_VALUE)
+    {
+        DWORD le = GetLastError();
+        if (le == ERROR_FILE_NOT_FOUND || le == ERROR_NO_MORE_FILES) return true; // empty folder
+        outError = "Cannot list local folder (error " + std::to_string(le) + ").";
+        S3ReportFail(report, localPath, outError);
+        return false;
+    }
 
+    // Continue after a failed child, but remember it: the caller must not delete the
+    // local source of a Move unless everything was uploaded.
+    bool allOk = true;
+    std::string firstError;
     do
     {
         if (strcmp(fd.cFileName, ".") == 0 || strcmp(fd.cFileName, "..") == 0) continue;
@@ -647,14 +675,21 @@ bool S3UploadRecursive(const char* localPath, const char* s3TargetDir, bool isDi
         snprintf(subLocal, sizeof(subLocal), "%s\\%s", localPath, fd.cFileName);
         bool subIsDir = (fd.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) != 0;
 
-        if (!S3UploadRecursive(subLocal, remoteDest, subIsDir, outError))
+        std::string childErr;
+        if (!S3UploadRecursive(subLocal, remoteDest, subIsDir, childErr, report))
         {
-            FindClose(hFind);
-            return false;
+            allOk = false;
+            if (firstError.empty()) firstError = childErr;
+            if (S3IsCancelError(childErr)) break;
         }
     } while (FindNextFileA(hFind, &fd));
 
     FindClose(hFind);
+    if (!allOk)
+    {
+        outError = firstError;
+        return false;
+    }
     return true;
 }
 
